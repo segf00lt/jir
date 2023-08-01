@@ -1,2 +1,4 @@
 *.vim
 vgcore*
+tags
+jir

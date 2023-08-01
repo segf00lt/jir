@@ -1,0 +1,13 @@
+// this should be ignored
+0x51231afab
+/* this too
+ *
+ * hello
+ */
+add fadd fmul
+0.35
+193.4
+123125
+007
+0b100101110
+eq16 1 2
