@@ -1,0 +1,7 @@
+add immediate s32 reg1 reg2 10
+add reg1 reg2 reg3
+fadd immediate f64 freg1 freg5 32.125
+eq immediate reg1 reg2 -117
+lt u32 reg2 reg4 reg1
+le immediate u32 reg2 reg4 0xf
+dumpreg reg13

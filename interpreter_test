@@ -1,0 +1,22 @@
+set reg1 24
+set reg2 2
+add reg3 reg1 reg2
+dumpreg reg3
+
+sub reg4 reg3 reg1
+eq reg5 reg4 reg2
+branch immediate reg5 2
+
+// we should jump over this
+dumpreg reg4
+
+dumpreg reg5
+
+set reg1 12
+
+dumpreg reg1
+sub immediate reg1 reg1 1
+gt immediate reg2 reg1 0
+branch immediate reg2 -3
+
+halt

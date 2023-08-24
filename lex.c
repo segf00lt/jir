@@ -6,44 +6,49 @@ struct DebugInfo {
 	char *start, *end;
 };
 
-enum Token {
-	TOKEN_INVALID = 256,
-#define X(val) TOKEN_##val,
-	INSTRUCTRIONS
-#undef X
-	TOKEN_BINLIT,
-	TOKEN_HEXLIT,
-	TOKEN_OCTLIT,
-	TOKEN_FLOATLIT,
-	TOKEN_INTLIT,
-	TOKEN_STRLIT,
-};
-typedef enum Token Token;
-
-const char *tokenDebug[] = {
-	"INVALID",
-#define X(val) #val,
-	INSTRUCTRIONS
-#undef X
-	"BINLIT",
-	"HEXLIT",
-	"OCTLIT",
-	"FLOATLIT",
-	"INTLIT",
-	"STRLIT",
-};
+#define KEYWORDS    \
+	OPCODES     \
+	TYPES       \
+	X(LABEL)    \
+	X(FUNCTION) \
+	X(IMMEDIATE)
 
 char *keywords[] = {
 	"________________________________",
 #define X(val) #val,
-	INSTRUCTRIONS
+	KEYWORDS
 #undef X
 };
 
 size_t keywordLengths[] = {
 	0,
 #define X(val) STRLEN(#val),
-	INSTRUCTRIONS
+	KEYWORDS
+#undef X
+};
+
+#define TOKENS       \
+	KEYWORDS     \
+	X(BINLIT)    \
+	X(HEXLIT)    \
+	X(OCTLIT)    \
+	X(FLOATLIT)  \
+	X(INTLIT)    \
+	X(STRLIT)    \
+	X(IDENTIFIER)\
+
+enum Token {
+	TOKEN_INVALID = 256,
+#define X(val) TOKEN_##val,
+	TOKENS
+#undef X
+};
+typedef enum Token Token;
+
+const char *tokenDebug[] = {
+	"INVALID",
+#define X(val) #val,
+	TOKENS
 #undef X
 };
 
@@ -71,7 +76,7 @@ void lex(Lexer *l) {
 	while(true) {
 		while(isspace(*l->cur)) {
 			if(*l->cur == '\n') {
-				l->debugInfo.col = 0;
+				l->debugInfo.col = 1;
 				++l->debugInfo.line;
 			} else {
 				++l->debugInfo.col;
@@ -80,10 +85,11 @@ void lex(Lexer *l) {
 		}
 
 		if(l->cur[0] == '/' && l->cur[1] == '/') {
-			l->debugInfo.col = 0;
+			l->debugInfo.col = 1;
 			++l->debugInfo.line;
+
 			while(*(l->cur++) != '\n');
-			//++l->cur;
+
 			continue;
 		}
 
@@ -145,6 +151,7 @@ void lex(Lexer *l) {
 	}
 
 	const bool firstiszero = (l->cur[0] == '0');
+	const bool firstisneg = (l->cur[0] == '-');
 
 	if(firstiszero && (l->cur[1] == 'b' || l->cur[1] == 'B')) {
 		for(s = l->cur + 2; *s == '0' || *s == '1'; ++s);
@@ -164,8 +171,8 @@ void lex(Lexer *l) {
 		l->end = s;
 		l->token = TOKEN_OCTLIT;
 		l->cur = s;
-	} else if(isdigit(l->cur[0])) {
-		for(s = l->cur; isdigit(*s); ++s);
+	} else if(firstisneg || isdigit(l->cur[0])) {
+		for(s = l->cur + firstisneg; isdigit(*s); ++s);
 		if(*s == '.') {
 			while(isdigit(*++s));
 			l->start = l->cur;
@@ -183,13 +190,23 @@ void lex(Lexer *l) {
 			if(*s == '\\')
 				++s;
 
+		++s;
 		l->start = l->cur;
-		l->end = s + 1;
+		l->end = s;
 		l->token = TOKEN_STRLIT;
 		l->cur = s;
 	} else {
-		*(l->debugInfo.end) = 0;
-		error(1, 0, "bad token at line %zu, col %zu\n>\t%s",
-				l->debugInfo.line, l->debugInfo.col, l->debugInfo.start);
+		for(s = l->cur; *s && (isalnum(*s) || *s == '_'); ++s);
+		if(s == l->cur) {
+			*(l->debugInfo.end) = 0;
+			error(1, 0, "bad token at line %zu, col %zu\n>\t%s",
+					l->debugInfo.line, l->debugInfo.col, l->debugInfo.start);
+		} else {
+			++s;
+			l->start = l->cur;
+			l->end = s;
+			l->token = TOKEN_IDENTIFIER;
+			l->cur = s;
+		}
 	}
 }
