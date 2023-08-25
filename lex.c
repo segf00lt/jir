@@ -9,6 +9,7 @@ struct DebugInfo {
 #define KEYWORDS    \
 	OPCODES     \
 	TYPES       \
+	SEGMENTS    \
 	X(LABEL)    \
 	X(FUNCTION) \
 	X(IMMEDIATE)
@@ -35,7 +36,7 @@ size_t keywordLengths[] = {
 	X(FLOATLIT)  \
 	X(INTLIT)    \
 	X(STRLIT)    \
-	X(IDENTIFIER)\
+	X(IDENTIFIER)
 
 enum Token {
 	TOKEN_INVALID = 256,
@@ -122,6 +123,18 @@ void lex(Lexer *l) {
 	if(!*l->cur) {
 		l->eof = true;
 		l->token = TOKEN_INVALID;
+		return;
+	}
+
+	if(*l->cur == '%') {
+		s = l->cur + 1;
+		while(isdigit(*s++));
+		assert("bad token" && s != (l->cur + 1));
+		l->start = l->cur;
+		l->debugInfo.col += (size_t)(s - l->cur);
+		l->cur = s;
+		l->end = s;
+		l->token = TOKEN_IDENTIFIER;
 		return;
 	}
 

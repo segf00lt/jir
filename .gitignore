@@ -2,3 +2,5 @@
 vgcore*
 tags
 jir
+test_llvm.c
+test_llvm.ll

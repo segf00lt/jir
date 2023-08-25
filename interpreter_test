@@ -1,22 +1,63 @@
-set reg1 24
-set reg2 2
-add reg3 reg1 reg2
-dumpreg reg3
+set %1 24
+set %2 2
+add %3 %1 %2
+dumpreg %3
 
-sub reg4 reg3 reg1
-eq reg5 reg4 reg2
-branch immediate reg5 2
+sub %4 %3 %1
+eq %5 %4 %2
+branch immediate %5 2
 
 // we should jump over this
-dumpreg reg4
+dumpreg %4
 
-dumpreg reg5
+dumpreg %5
 
-set reg1 12
+set %1 12
 
-dumpreg reg1
-sub immediate reg1 reg1 1
-gt immediate reg2 reg1 0
-branch immediate reg2 -3
+dumpreg %1
+sub immediate %1 %1 1
+gt immediate %2 %1 0
+branch immediate %2 -3
+
+move %6 %1
+add immediate %7 %6 197
+mod immediate %8 %7 3
+dumpreg %7
+dumpreg %8
+
+set %1 13
+set %2 0x4
+stor global s32 %2 %1
+load global s32 %3 %2
+ne %4 %3 %1
+branch immediate %4 0 // if something is wrong the program wont end
+dumpreg %4
+
+alloc u64 %3
+alloc u8 %4
+dumpreg %4
+set %1 1234567
+stor local u64 %3 %1
+set u8 %1 0xff
+stor local u8 %4 %1
+load local u64 %2 %3
+load local u8 %6 %4
+dumpreg %1
+dumpreg %2
+dumpreg %6
+bframe
+alloc u32 %3
+set %1 7654321
+stor local u32 %3 %1
+set %1 0
+load local u32 %1 %3
+dumpreg %1
+dumpreg %3
+alloc u8 %3
+dumpreg %3
+eframe
+alloc u8 %3
+dumpreg %3
+
 
 halt

@@ -37,13 +37,14 @@
 	X(JMP)          \
 	X(LOAD)         \
 	X(STOR)         \
-	X(PUSH)         \
-	X(POP)          \
-	X(MEMALLOC)     \
-	X(MEMFREE)      \
-	X(MEMSET)       \
 	X(SET)          \
-	X(SETREG)       \
+	X(MEMSET)       \
+	X(MOVE)         \
+	X(BFRAME)       \
+	X(EFRAME)       \
+	X(ALLOC)        \
+	X(HEAPALLOC)    \
+	X(HEAPFREE)     \
 	X(BITCAST)      \
 	X(ITOF)         \
 	X(FTOI)         \
@@ -72,6 +73,7 @@
 	X(DUMPREG)      \
 	X(DUMPREGRANGE) \
 	X(DUMPMEM)      \
+	X(DUMPMEMRANGE) \
 	X(HALT)
 
 #define TYPES  \
@@ -79,12 +81,25 @@
 	X(U64) \
 	X(S32) \
 	X(U32) \
-	X(S8)  \
-	X(U8)  \
 	X(S16) \
 	X(U16) \
+	X(S8)  \
+	X(U8)  \
 	X(F32) \
 	X(F64)
+
+size_t TYPE_SIZES[] = {
+	8, // s64
+	8, // u64
+	4, // s32
+	4, // u32
+	2, // s16
+	2, // u16
+	1, // s8
+	1, // u8
+	4, // f32
+	8, // f64
+};
 
 #define SEGMENTS   \
 	X(LOCAL)   \
@@ -93,7 +108,7 @@
 	X(HEAP)
 
 #define TOKEN_TO_OP(t) (JIROP)(t - TOKEN_EQ)
-#define TOKEN_TO_TYPE(t) (JIRTYPE)(t - TOKEN_S64)
+#define TOKEN_TO_TYPE(t) (JIRTYPE)((int)t - (int)TOKEN_S64)
 #define TOKEN_TO_SEGMENT(t) (JIRSEG)(t - TOKEN_LOCAL)
 
 enum JIROP {
@@ -139,9 +154,8 @@ struct JIR {
 	JIROP opcode;
 	JIRTYPE type;
 	JIRTYPE type2;
-	int ra, rb, rc;
-	int fa, fb, fc;
-	int f64a, f64b, f64c;
+	JIRSEG seg;
+	int a, b, c;
 	bool immediate;
 	uint64_t immui;
 	int64_t immsi;
@@ -152,13 +166,13 @@ typedef struct JIR JIR;
 
 #include "lex.c"
 
-void parse(Lexer *l, JIR *instarr) {
+void parse(Lexer *l, JIR **instarr) {
 	char debugBuf[64];
 	JIR inst;
 	Token token;
-	char *ident = NULL;
+	unsigned long index = 0;
 
-	assert(instarr);
+	//assert(*instarr == NULL);
 
 	/*
 	 * grammar
@@ -171,20 +185,15 @@ void parse(Lexer *l, JIR *instarr) {
 	 * branch "immediate" cond_reg offset_imm
 	 * jmp offset_reg
 	 * jmp "immediate" offset_imm
-	 * load type segment dest_reg addr_reg
-	 * load "immediate" type segment dest_reg addr_imm
-	 * stor type segment src_reg addr_reg
-	 * stor "immediate" type segment src_reg addr_imm
-	 * set type dest_reg src_reg
-	 * set "immediate" type dest_reg imm
-	 * push type src_reg
-	 * push "immediate" type imm
-	 * pop type dest_reg
-	 * memalloc ptr_dest_reg size_reg
-	 * memalloc "immediate" ptr_dest_reg size_imm
-	 * memfree ptr_reg
-	 * memset ptr_reg size_reg val_reg
-	 * memset "immediate" ptr_reg size_reg val_imm
+	 * load segment type dest_reg addr_reg
+	 * stor segment type dest_addr_reg val_reg
+	 * set type reg imm
+	 * mov type dest_reg src_reg
+	 * memset segment type start_reg count_reg val_imm
+	 * alloc type
+	 * heapalloc ptr_dest_reg size_reg
+	 * heapalloc "immediate" ptr_dest_reg size_imm
+	 * heapfree ptr_reg
 	 * call funcid_reg
 	 * call "immediate" funcid_imm
 	 * ret
@@ -203,24 +212,16 @@ void parse(Lexer *l, JIR *instarr) {
 			break;
 		case TOKEN_HALT:
 			inst.opcode = JIROP_HALT;
-			arrpush(instarr, inst);
+			arrput(*instarr, inst);
 			break;
 		case TOKEN_DUMPREG:
 			inst.opcode = JIROP_DUMPREG;
 			lex(l);
 			assert(l->token == TOKEN_IDENTIFIER);
-			ident = l->start;
-			if(strstr(ident, "REG") == ident) {
-				ident += STRLEN("REG");
-				inst.ra = atoi(ident);
-			} else if(strstr(ident, "FREG") == ident) {
-				ident += STRLEN("FREG");
-				inst.fa = atoi(ident);
-			} else if(strstr(ident, "F64REG") == ident) {
-				ident += STRLEN("F64REG");
-				inst.f64a = atoi(ident);
-			}
-			arrpush(instarr, inst);
+			assert(*l->start == '%');
+			index = atoi(l->start + 1);
+			inst.a = index;
+			arrput(*instarr, inst);
 			break;
 		case TOKEN_ADD: case TOKEN_FADD:
 		case TOKEN_SUB: case TOKEN_FSUB:
@@ -245,31 +246,15 @@ void parse(Lexer *l, JIR *instarr) {
 			}
 
 			assert(l->token == TOKEN_IDENTIFIER);
-			ident = l->start;
-			if(strstr(ident, "REG") == ident) {
-				ident += STRLEN("REG");
-				inst.ra = atoi(ident);
-			} else if(strstr(ident, "FREG") == ident) {
-				ident += STRLEN("FREG");
-				inst.fa = atoi(ident);
-			} else if(strstr(ident, "F64REG") == ident) {
-				ident += STRLEN("F64REG");
-				inst.f64a = atoi(ident);
-			}
+			assert(*l->start == '%');
+			index = atoi(l->start + 1);
+			inst.a = index;
 
 			lex(l);
 			assert(l->token == TOKEN_IDENTIFIER);
-			ident = l->start;
-			if(strstr(ident, "REG") == ident) {
-				ident += STRLEN("REG");
-				inst.rb = atoi(ident);
-			} else if(strstr(ident, "FREG") == ident) {
-				ident += STRLEN("FREG");
-				inst.fb = atoi(ident);
-			} else if(strstr(ident, "F64REG") == ident) {
-				ident += STRLEN("F64REG");
-				inst.f64b = atoi(ident);
-			}
+			assert(*l->start == '%');
+			index = atoi(l->start + 1);
+			inst.b = index;
 			
 			if(inst.immediate) {
 				lex(l);
@@ -296,20 +281,12 @@ void parse(Lexer *l, JIR *instarr) {
 			} else {
 				lex(l);
 				assert(l->token == TOKEN_IDENTIFIER);
-				ident = l->start;
-				if(strstr(ident, "REG") == ident) {
-					ident += STRLEN("REG");
-					inst.rc = atoi(ident);
-				} else if(strstr(ident, "FREG") == ident) {
-					ident += STRLEN("FREG");
-					inst.fc = atoi(ident);
-				} else if(strstr(ident, "F64REG") == ident) {
-					ident += STRLEN("F64REG");
-					inst.f64c = atoi(ident);
-				}
+				assert(*l->start == '%');
+				index = atoi(l->start + 1);
+				inst.c = index;
 			}
 
-			arrpush(instarr, inst);
+			arrput(*instarr, inst);
 			break;
 		case TOKEN_NOT: case TOKEN_NEG: case TOKEN_FNEG:
 
@@ -320,9 +297,14 @@ void parse(Lexer *l, JIR *instarr) {
 
 			lex(l);
 			inst.opcode = TOKEN_TO_OP(token);
-			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64)
-				inst.type = TOKEN_TO_TYPE(token);
-			arrpush(instarr, inst);
+			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
+				inst.type = TOKEN_TO_TYPE(l->token);
+				lex(l);
+			}
+			assert(l->token == TOKEN_IDENTIFIER);
+			assert(*l->start == '%');
+			inst.a = atoi(l->start + 1);
+			arrput(*instarr, inst);
 			break;
 		case TOKEN_BRANCH:
 			inst.opcode = JIROP_BRANCH;
@@ -331,36 +313,21 @@ void parse(Lexer *l, JIR *instarr) {
 				inst.immediate = true;
 				lex(l);
 				assert(l->token == TOKEN_IDENTIFIER);
-				ident = l->start;
-				if(strstr(ident, "REG") == ident) {
-					ident += STRLEN("REG");
-					inst.ra = atoi(ident);
-				} else {
-					assert("reg must be integer reg" && 0);
-				}
+				assert(*l->start == '%');
+				inst.a = atoi(l->start + 1);
 				lex(l);
 				assert(l->token == TOKEN_INTLIT);
 				sscanf(l->start, "%li", &inst.immsi);
 			} else {
 				assert(l->token == TOKEN_IDENTIFIER);
-				ident = l->start;
-				if(strstr(ident, "REG") == ident) {
-					ident += STRLEN("REG");
-					inst.ra = atoi(ident);
-				} else {
-					assert("reg must be integer reg" && 0);
-				}
+				assert(*l->start == '%');
+				inst.a = atoi(l->start + 1);
 				lex(l);
 				assert(l->token == TOKEN_IDENTIFIER);
-				ident = l->start;
-				if(strstr(ident, "REG") == ident) {
-					ident += STRLEN("REG");
-					inst.rb = atoi(ident);
-				} else {
-					assert("reg must be integer reg" && 0);
-				}
+				assert(*l->start == '%');
+				inst.a = atoi(l->start + 1);
 			}
-			arrpush(instarr, inst);
+			arrput(*instarr, inst);
 			break;     
 		case TOKEN_JMP:
 			inst.opcode = JIROP_JMP;
@@ -372,27 +339,49 @@ void parse(Lexer *l, JIR *instarr) {
 				sscanf(l->start, "%li", &inst.immsi);
 			} else {
 				assert(l->token == TOKEN_IDENTIFIER);
-				ident = l->start;
-				if(strstr(ident, "REG") == ident) {
-					ident += STRLEN("REG");
-					inst.ra = atoi(ident);
-				} else {
-					assert("reg must be integer reg" && 0);
-				}
+				assert(*l->start == '%');
+				inst.a = atoi(l->start + 1);
 			}
-			arrpush(instarr, inst);
+			arrput(*instarr, inst);
 			break;        
-		case TOKEN_LOAD:
+		case TOKEN_LOAD: case TOKEN_STOR:
+			inst.opcode = TOKEN_TO_OP(token);
+			lex(l);
+			assert(l->token >= TOKEN_LOCAL && l->token <= TOKEN_HEAP);
+			inst.seg = TOKEN_TO_SEGMENT(l->token);
+			lex(l);
+			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
+				inst.type = TOKEN_TO_TYPE(l->token);
+				lex(l);
+			}
+			assert(l->token == TOKEN_IDENTIFIER);
+			assert(*l->start == '%');
+			inst.a = atoi(l->start + 1);
+			lex(l);
+			assert(l->token == TOKEN_IDENTIFIER);
+			assert(*l->start == '%');
+			inst.b = atoi(l->start + 1);
+			arrput(*instarr, inst);
 			break;       
-		case TOKEN_STOR:
-			break;       
-		case TOKEN_PUSH:
+		case TOKEN_BFRAME: case TOKEN_EFRAME:
+			inst.opcode = TOKEN_TO_OP(token);
+			arrput(*instarr, inst);
 			break;
-		case TOKEN_POP:
+		case TOKEN_ALLOC:
+			inst.opcode = JIROP_ALLOC;
+			lex(l);
+			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
+				inst.type = TOKEN_TO_TYPE(l->token);
+				lex(l);
+			}
+			assert(l->token == TOKEN_IDENTIFIER);
+			assert(*l->start == '%');
+			inst.a = atoi(l->start + 1);
+			arrput(*instarr, inst);
 			break;
-		case TOKEN_MEMALLOC:
+		case TOKEN_HEAPALLOC:
 			break;
-		case TOKEN_MEMFREE:
+		case TOKEN_HEAPFREE:
 			break;
 		case TOKEN_MEMSET:
 			break;
@@ -400,21 +389,13 @@ void parse(Lexer *l, JIR *instarr) {
 			inst.opcode = JIROP_SET;
 			lex(l);
 			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
-				inst.type = TOKEN_TO_TYPE(token);
+				inst.type = TOKEN_TO_TYPE(l->token);
 				lex(l);
 			}
 			assert(l->token == TOKEN_IDENTIFIER);
-			ident = l->start;
-			if(strstr(ident, "REG") == ident) {
-				ident += STRLEN("REG");
-				inst.ra = atoi(ident);
-			} else if(strstr(ident, "FREG") == ident) {
-				ident += STRLEN("FREG");
-				inst.fa = atoi(ident);
-			} else if(strstr(ident, "F64REG") == ident) {
-				ident += STRLEN("F64REG");
-				inst.f64a = atoi(ident);
-			}
+			assert(*l->start == '%');
+			index = atoi(l->start + 1);
+			inst.a = index;
 			lex(l);
 			assert(l->token >= TOKEN_BINLIT && l->token <= TOKEN_INTLIT);
 			switch(l->token) {
@@ -437,41 +418,25 @@ void parse(Lexer *l, JIR *instarr) {
 				assert(0);
 				break;
 			}
-			arrpush(instarr, inst);
+			arrput(*instarr, inst);
 			break;        
-		case TOKEN_SETREG:
-			inst.opcode = JIROP_SETREG;
+		case TOKEN_MOVE:
+			inst.opcode = JIROP_MOVE;
 			lex(l);
 			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
-				inst.type = TOKEN_TO_TYPE(token);
+				inst.type = TOKEN_TO_TYPE(l->token);
 				lex(l);
 			}
 			assert(l->token == TOKEN_IDENTIFIER);
-			ident = l->start;
-			if(strstr(ident, "REG") == ident) {
-				ident += STRLEN("REG");
-				inst.ra = atoi(ident);
-			} else if(strstr(ident, "FREG") == ident) {
-				ident += STRLEN("FREG");
-				inst.fa = atoi(ident);
-			} else if(strstr(ident, "F64REG") == ident) {
-				ident += STRLEN("F64REG");
-				inst.f64a = atoi(ident);
-			}
+			assert(*l->start == '%');
+			index = atoi(l->start + 1);
+			inst.a = index;
 			lex(l);
 			assert(l->token == TOKEN_IDENTIFIER);
-			ident = l->start;
-			if(strstr(ident, "REG") == ident) {
-				ident += STRLEN("REG");
-				inst.ra = atoi(ident);
-			} else if(strstr(ident, "FREG") == ident) {
-				ident += STRLEN("FREG");
-				inst.fa = atoi(ident);
-			} else if(strstr(ident, "F64REG") == ident) {
-				ident += STRLEN("F64REG");
-				inst.f64a = atoi(ident);
-			}
-			arrpush(instarr, inst);
+			assert(*l->start == '%');
+			index = atoi(l->start + 1);
+			inst.b = index;
+			arrput(*instarr, inst);
 			break;        
 		case TOKEN_INVALID:
 			break;
@@ -480,13 +445,11 @@ void parse(Lexer *l, JIR *instarr) {
 }
 
 void JIR_print(JIR inst) {
-	printf("opcode: %s\ntype: %s\ntype2: %s\nra: %i\nrb: %i\nrc: %i\nfa: %i\nfb: %i\nfc: %i\nf64a: %i\nf64b: %i\nf64c: %i\nimmediate: %i\nimmui: %lu\nimmsi: %li\nimmf: %f\nimmf64: %lf\n",
+	printf("opcode: %s\ntype: %s\ntype2: %s\na: %i\nb: %i\nc: %i\nimmediate: %i\nimmui: %lu\nimmsi: %li\nimmf: %f\nimmf64: %lf\n",
 	opcodesDebug[inst.opcode],
 	typesDebug[inst.type],
 	typesDebug[inst.type2],
-	inst.ra, inst.rb, inst.rc,
-	inst.fa, inst.fb, inst.fc,
-	inst.f64a, inst.f64b, inst.f64c,
+	inst.a, inst.b, inst.c,
 	inst.immediate,
 	inst.immui,
 	inst.immsi,
@@ -498,6 +461,12 @@ void JIR_exec(JIR *prog) {
 	uint64_t regs[32] = {0};
 	float fregs[32] = {0};
 	double f64regs[32] = {0};
+	uint8_t *global = calloc(0x2000, sizeof(uint8_t));
+	uint8_t *local = calloc(0x2000, sizeof(uint8_t));
+	long *localbase = calloc(0x80, sizeof(long));
+	long local_pos = 0;
+	long localbase_pos = 0;
+	uint8_t *segptr = NULL;
 
 	bool run = true;
 	bool dojump = false;
@@ -512,127 +481,124 @@ void JIR_exec(JIR *prog) {
 			printf("opcode %s unimplemeted\n", opcodesDebug[inst.opcode]);
 			assert(0);
 			break;
-		case JIROP_SET:
-			regs[inst.ra] = inst.immsi;
-			break;
 		case JIROP_DUMPREG:
 			if(inst.type == JIRTYPE_F32)
-				printf("freg %i: %f\n", inst.fa, fregs[inst.fa]);
+				printf("float reg %i: %f\n", inst.a, fregs[inst.a]);
 			else if(inst.type == JIRTYPE_F64)
-				printf("f64reg %i: %g\n", inst.f64a, f64regs[inst.fa]);
+				printf("float64 reg %i: %g\n", inst.a, f64regs[inst.a]);
 			else
-				printf("reg %i: %li\n", inst.ra, regs[inst.ra]);
+				printf("reg %i: %li\n", inst.a, regs[inst.a]);
 			break;
 		case JIROP_ADD:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] + inst.immsi;
+				regs[inst.a] = regs[inst.b] + inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] + regs[inst.rc];
+				regs[inst.a] = regs[inst.b] + regs[inst.c];
 			}
 			break;
 		case JIROP_SUB:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] - inst.immsi;
+				regs[inst.a] = regs[inst.b] - inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] - regs[inst.rc];
+				regs[inst.a] = regs[inst.b] - regs[inst.c];
 			}
 			break;
 		case JIROP_MUL:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] * inst.immsi;
+				regs[inst.a] = regs[inst.b] * inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] * regs[inst.rc];
+				regs[inst.a] = regs[inst.b] * regs[inst.c];
 			}
 			break;
 		case JIROP_DIV:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] / inst.immsi;
+				regs[inst.a] = regs[inst.b] / inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] / regs[inst.rc];
+				regs[inst.a] = regs[inst.b] / regs[inst.c];
 			}
 			break;
 		case JIROP_MOD:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] % inst.immsi;
+				regs[inst.a] = regs[inst.b] % inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] % regs[inst.rc];
+				regs[inst.a] = regs[inst.b] % regs[inst.c];
 			}
 			break;
 		case JIROP_EQ:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] == inst.immsi;
+				regs[inst.a] = regs[inst.b] == inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] == regs[inst.rc];
+				regs[inst.a] = regs[inst.b] == regs[inst.c];
 			}
 			break;
 		case JIROP_NE:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] != inst.immsi;
+				regs[inst.a] = regs[inst.b] != inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] != regs[inst.rc];
+				regs[inst.a] = regs[inst.b] != regs[inst.c];
 			}
 			break;
 		case JIROP_LE:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] <= inst.immsi;
+				regs[inst.a] = regs[inst.b] <= inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] <= regs[inst.rc];
+				regs[inst.a] = regs[inst.b] <= regs[inst.c];
 			}
 			break;
 		case JIROP_GT:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] > inst.immsi;
+				regs[inst.a] = regs[inst.b] > inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] > regs[inst.rc];
+				regs[inst.a] = regs[inst.b] > regs[inst.c];
 			}
 			break;
 		case JIROP_LT:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] < inst.immsi;
+				regs[inst.a] = regs[inst.b] < inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] < regs[inst.rc];
+				regs[inst.a] = regs[inst.b] < regs[inst.c];
 			}
 			break;
 		case JIROP_GE:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] >= inst.immsi;
+				regs[inst.a] = regs[inst.b] >= inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] >= regs[inst.rc];
+				regs[inst.a] = regs[inst.b] >= regs[inst.c];
 			}
 			break;
 		case JIROP_AND:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] & inst.immsi;
+				regs[inst.a] = regs[inst.b] & inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] & regs[inst.rc];
+				regs[inst.a] = regs[inst.b] & regs[inst.c];
 			}
 			break;
 		case JIROP_OR:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] | inst.immsi;
+				regs[inst.a] = regs[inst.b] | inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] | regs[inst.rc];
+				regs[inst.a] = regs[inst.b] | regs[inst.c];
 			}
 			break;
 		case JIROP_XOR:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] ^ inst.immsi;
+				regs[inst.a] = regs[inst.b] ^ inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] ^ regs[inst.rc];
+				regs[inst.a] = regs[inst.b] ^ regs[inst.c];
 			}
 			break;
 		case JIROP_LSHIFT:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] << inst.immsi;
+				regs[inst.a] = regs[inst.b] << inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] << regs[inst.rc];
+				regs[inst.a] = regs[inst.b] << regs[inst.c];
 			}
 			break;
 		case JIROP_RSHIFT:
 			if(inst.immediate) {
-				regs[inst.ra] = regs[inst.rb] >> inst.immsi;
+				regs[inst.a] = regs[inst.b] >> inst.immsi;
 			} else {
-				regs[inst.ra] = regs[inst.rb] >> regs[inst.rc];
+				regs[inst.a] = regs[inst.b] >> regs[inst.c];
 			}
 			break;
 
@@ -640,43 +606,170 @@ void JIR_exec(JIR *prog) {
 			if(inst.immediate) {
 				newpc = pc + inst.immsi;
 			} else {
-				newpc = pc + (int64_t)regs[inst.ra];
+				newpc = pc + (int64_t)regs[inst.a];
 			}
 			break;
 		case JIROP_BRANCH:
-			dojump = (bool)regs[inst.ra];
+			dojump = (bool)regs[inst.a];
 			if(dojump) {
 				if(inst.immediate) {
 					newpc = pc + inst.immsi;
 				} else {
-					newpc = pc + (int64_t)regs[inst.rb];
+					newpc = pc + (int64_t)regs[inst.b];
 				}
 			}
 			break;
 
+		//TODO memory ops
+		case JIROP_SET:
+			switch(inst.type) {
+			case JIRTYPE_S64: case JIRTYPE_S32: case JIRTYPE_S16: case JIRTYPE_S8:
+				regs[inst.a] = inst.immsi;
+				break;
+			case JIRTYPE_U64: case JIRTYPE_U32: case JIRTYPE_U16: case JIRTYPE_U8:
+				regs[inst.a] = inst.immui;
+				break;
+			case JIRTYPE_F32:
+				fregs[inst.a] = inst.immf;
+				break;
+			case JIRTYPE_F64:
+				f64regs[inst.a] = inst.immf64;
+				break;
+			}
+			break;
+		case JIROP_MOVE:
+			regs[inst.a] = regs[inst.b];
+			break;
+		case JIROP_LOAD:
+			switch(inst.seg) {
+			case JIRSEG_LOCAL:
+				segptr = local;
+				break;
+			case JIRSEG_GLOBAL:
+				segptr = global;
+				break;
+			case JIRSEG_ARGUMENT:
+				assert("argument segment unimplemented" && 0);
+				break;
+			case JIRSEG_HEAP:
+				assert("heap segment unimplemented" && 0);
+				break;
+			}
+			switch(inst.type) {
+			case JIRTYPE_S64:
+				regs[inst.a] = *(int64_t*)(segptr + regs[inst.b]);
+				break;
+			case JIRTYPE_U64:
+				regs[inst.a] = *(uint64_t*)(segptr + regs[inst.b]);
+				break;
+			case JIRTYPE_S32:
+				regs[inst.a] = *(int32_t*)(segptr + regs[inst.b]);
+				break;
+			case JIRTYPE_U32:
+				regs[inst.a] = *(uint32_t*)(segptr + regs[inst.b]);
+				break;
+			case JIRTYPE_S16:
+				regs[inst.a] = *(int16_t*)(segptr + regs[inst.b]);
+				break;
+			case JIRTYPE_U16:
+				regs[inst.a] = *(uint16_t*)(segptr + regs[inst.b]);
+				break;
+			case JIRTYPE_S8:
+				regs[inst.a] = *(int8_t*)(segptr + regs[inst.b]);
+				break;
+			case JIRTYPE_U8:
+				regs[inst.a] = *(uint8_t*)(segptr + regs[inst.b]);
+				break;
+			case JIRTYPE_F32:
+				fregs[inst.a] = *(float*)(segptr + regs[inst.b]);
+				break;
+			case JIRTYPE_F64:
+				f64regs[inst.a] = *(double*)(segptr + regs[inst.b]);
+				break;
+			}
+			break;
+		case JIROP_STOR:
+			switch(inst.seg) {
+			case JIRSEG_LOCAL:
+				segptr = local;
+				break;
+			case JIRSEG_GLOBAL:
+				segptr = global;
+				break;
+			case JIRSEG_ARGUMENT:
+				assert("argument segment unimplemented" && 0);
+				break;
+			case JIRSEG_HEAP:
+				assert("heap segment unimplemented" && 0);
+				break;
+			}
+			switch(inst.type) {
+			case JIRTYPE_S64:
+				*(int64_t*)(segptr + regs[inst.a]) = regs[inst.b];
+				break;
+			case JIRTYPE_U64:
+				*(uint64_t*)(segptr + regs[inst.a]) = regs[inst.b];
+				break;
+			case JIRTYPE_S32:
+				*(int32_t*)(segptr + regs[inst.a]) = regs[inst.b];
+				break;
+			case JIRTYPE_U32:
+				*(uint32_t*)(segptr + regs[inst.a]) = regs[inst.b];
+				break;
+			case JIRTYPE_S16:
+				*(int16_t*)(segptr + regs[inst.a]) = regs[inst.b];
+				break;
+			case JIRTYPE_U16:
+				*(uint16_t*)(segptr + regs[inst.a]) = regs[inst.b];
+				break;
+			case JIRTYPE_S8:
+				*(int8_t*)(segptr + regs[inst.a]) = regs[inst.b];
+				break;
+			case JIRTYPE_U8:
+				*(uint8_t*)(segptr + regs[inst.a]) = regs[inst.b];
+				break;
+			case JIRTYPE_F32:
+				*(float*)(segptr + regs[inst.a]) = fregs[inst.b];
+				break;
+			case JIRTYPE_F64:
+				*(double*)(segptr + regs[inst.a]) = f64regs[inst.b];
+				break;
+			}
+			break;
+		case JIROP_BFRAME:
+			localbase[localbase_pos++] = local_pos;
+			break;
+		case JIROP_EFRAME:
+			local_pos = localbase[--localbase_pos];
+			break;
+		case JIROP_ALLOC:
+			regs[inst.a] = local_pos;
+			local_pos += TYPE_SIZES[inst.type];
+			break;
+
 		//TODO floating ops
-		case JIROP_FADD:
-			break;
-		case JIROP_FSUB:
-			break;
-		case JIROP_FMUL:
-			break;
-		case JIROP_FDIV:
-			break;
-		case JIROP_FMOD:
-			break;
-		case JIROP_FEQ:
-			break;
-		case JIROP_FNE:
-			break;
-		case JIROP_FLE:
-			break;
-		case JIROP_FGT:
-			break;
-		case JIROP_FLT:
-			break;
-		case JIROP_FGE:
-			break;
+		//case JIROP_FADD:
+		//	break;
+		//case JIROP_FSUB:
+		//	break;
+		//case JIROP_FMUL:
+		//	break;
+		//case JIROP_FDIV:
+		//	break;
+		//case JIROP_FMOD:
+		//	break;
+		//case JIROP_FEQ:
+		//	break;
+		//case JIROP_FNE:
+		//	break;
+		//case JIROP_FLE:
+		//	break;
+		//case JIROP_FGT:
+		//	break;
+		//case JIROP_FLT:
+		//	break;
+		//case JIROP_FGE:
+		//	break;
 
 		case JIROP_HALT:
 			run = false;
@@ -687,6 +780,10 @@ void JIR_exec(JIR *prog) {
 
 		pc = newpc;
 	}
+
+	free(global);
+	free(local);
+	free(localbase);
 }
 
 int main(int argc, char **argv) {
@@ -715,7 +812,7 @@ int main(int argc, char **argv) {
 	for(char *s = fm.buf; *s; ++s)
 		*s = toupper(*s);
 	JIR *instarr = NULL;
-	arrsetcap(instarr, 10);
+	arrsetcap(instarr, 2);
 	lexer = (Lexer) {
 		.keywords = keywords,
 		.keywordsCount = ARRLEN(keywords),
@@ -726,7 +823,8 @@ int main(int argc, char **argv) {
 		.debugInfo = (DebugInfo){ .line = 1, .col = 1 },
 	};
 
-	parse(&lexer, instarr);
+	parse(&lexer, &instarr);
+	printf("%zu\n", arrlen(instarr));
 	for(int i = 0; i < arrlen(instarr); ++i) {
 		printf("INST %i\n", i);
 		JIR_print(instarr[i]);
@@ -734,6 +832,7 @@ int main(int argc, char **argv) {
 	}
 
 	JIR_exec(instarr);
+	arrfree(instarr);
 
 	return 0;
 }
