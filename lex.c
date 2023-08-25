@@ -12,7 +12,7 @@ struct DebugInfo {
 	SEGMENTS    \
 	X(LABEL)    \
 	X(FUNCTION) \
-	X(IMMEDIATE)
+	X(IMM)
 
 char *keywords[] = {
 	"________________________________",

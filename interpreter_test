@@ -1,44 +1,44 @@
-set %1 24
-set %2 2
+val %1 24
+val %2 2
 add %3 %1 %2
 dumpreg %3
 
 sub %4 %3 %1
 eq %5 %4 %2
-branch immediate %5 2
+branch imm %5 2
 
 // we should jump over this
 dumpreg %4
 
 dumpreg %5
 
-set %1 12
+val %1 12
 
 dumpreg %1
-sub immediate %1 %1 1
-gt immediate %2 %1 0
-branch immediate %2 -3
+sub imm %1 %1 1
+gt imm %2 %1 0
+branch imm %2 -3
 
 move %6 %1
-add immediate %7 %6 197
-mod immediate %8 %7 3
+add imm %7 %6 197
+mod imm %8 %7 3
 dumpreg %7
 dumpreg %8
 
-set %1 13
-set %2 0x4
+val %1 13
+val %2 0x4
 stor global s32 %2 %1
 load global s32 %3 %2
 ne %4 %3 %1
-branch immediate %4 0 // if something is wrong the program wont end
+branch imm %4 0 // if something is wrong the program wont end
 dumpreg %4
 
 alloc u64 %3
 alloc u8 %4
 dumpreg %4
-set %1 1234567
+val %1 1234567
 stor local u64 %3 %1
-set u8 %1 0xff
+val u8 %1 0xff
 stor local u8 %4 %1
 load local u64 %2 %3
 load local u8 %6 %4
@@ -47,9 +47,9 @@ dumpreg %2
 dumpreg %6
 bframe
 alloc u32 %3
-set %1 7654321
+val %1 7654321
 stor local u32 %3 %1
-set %1 0
+val %1 0
 load local u32 %1 %3
 dumpreg %1
 dumpreg %3
@@ -58,6 +58,11 @@ dumpreg %3
 eframe
 alloc u8 %3
 dumpreg %3
+
+val f32 %0 1.234
+setarg f32 %0 %0
+getarg f32 %1 %0
+dumpreg f32 %1
 
 
 halt
