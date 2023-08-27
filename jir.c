@@ -70,8 +70,8 @@
 	X(FMOD)         \
 	X(CALL)         \
 	X(RET)          \
-	X(SETARG)       \
-	X(GETARG)       \
+	X(SETPROCREG)   \
+	X(GETPROCREG)   \
 	X(DUMPREG)      \
 	X(DUMPREGRANGE) \
 	X(DUMPMEM)      \
@@ -449,8 +449,8 @@ void parse(Lexer *l, JIR **instarr) {
 			inst.b = index;
 			arrput(*instarr, inst);
 			break;        
-		case TOKEN_SETARG:
-			inst.opcode = JIROP_SETARG;
+		case TOKEN_SETPROCREG:
+			inst.opcode = JIROP_SETPROCREG;
 			lex(l);
 			if(l->token == TOKEN_IMM) {
 				inst.immediate = true;
@@ -493,8 +493,8 @@ void parse(Lexer *l, JIR **instarr) {
 			}
 			arrput(*instarr, inst);
 			break;
-		case TOKEN_GETARG:
-			inst.opcode = JIROP_GETARG;
+		case TOKEN_GETPROCREG:
+			inst.opcode = JIROP_GETPROCREG;
 			lex(l);
 			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
 				inst.type = TOKEN_TO_TYPE(l->token);
@@ -528,15 +528,16 @@ void JIR_print(JIR inst) {
 	inst.immf64);
 }
 
-void JIR_exec(JIR *prog) {
+void JIR_exec(JIR **proctab) {
+	JIR *prog = proctab[0];
 
 	uint64_t regs[32] = {0};
 	float fregs[32] = {0};
 	double f64regs[32] = {0};
 
-	uint64_t args[32] = {0};
-	float fargs[32] = {0};
-	double f64args[32] = {0};
+	uint64_t procregs[32] = {0};
+	float fprocregs[32] = {0};
+	double f64procregs[32] = {0};
 
 	uint8_t *global = calloc(0x2000, sizeof(uint8_t));
 	uint8_t *local = calloc(0x2000, sizeof(uint8_t));
@@ -856,52 +857,52 @@ void JIR_exec(JIR *prog) {
 		//case JIROP_FGE:
 		//	break;
 
-		case JIROP_SETARG:
+		case JIROP_SETPROCREG:
 			if(inst.immediate) {
 				switch(inst.type) {
 				case JIRTYPE_S64: case JIRTYPE_S32: case JIRTYPE_S16: case JIRTYPE_S8:
-					args[inst.a] = inst.immsi;
+					procregs[inst.a] = inst.immsi;
 					break;
 				case JIRTYPE_U64: case JIRTYPE_U32: case JIRTYPE_U16: case JIRTYPE_U8:
-					args[inst.a] = inst.immui;
+					procregs[inst.a] = inst.immui;
 					break;
 				case JIRTYPE_F32:
-					fargs[inst.a] = inst.immf;
+					fprocregs[inst.a] = inst.immf;
 					break;
 				case JIRTYPE_F64:
-					f64args[inst.a] = inst.immf64;
+					f64procregs[inst.a] = inst.immf64;
 					break;
 				}
 			} else {
 				switch(inst.type) {
 				case JIRTYPE_S64: case JIRTYPE_S32: case JIRTYPE_S16: case JIRTYPE_S8:
-					args[inst.a] = regs[inst.b];
+					procregs[inst.a] = regs[inst.b];
 					break;
 				case JIRTYPE_U64: case JIRTYPE_U32: case JIRTYPE_U16: case JIRTYPE_U8:
-					args[inst.a] = regs[inst.b];
+					procregs[inst.a] = regs[inst.b];
 					break;
 				case JIRTYPE_F32:
-					fargs[inst.a] = fregs[inst.b];
+					fprocregs[inst.a] = fregs[inst.b];
 					break;
 				case JIRTYPE_F64:
-					f64args[inst.a] = f64regs[inst.b];
+					f64procregs[inst.a] = f64regs[inst.b];
 					break;
 				}
 			}
 			break;
-		case JIROP_GETARG:
+		case JIROP_GETPROCREG:
 			switch(inst.type) {
 			case JIRTYPE_S64: case JIRTYPE_S32: case JIRTYPE_S16: case JIRTYPE_S8:
-				regs[inst.a] = args[inst.b];
+				regs[inst.a] = procregs[inst.b];
 				break;
 			case JIRTYPE_U64: case JIRTYPE_U32: case JIRTYPE_U16: case JIRTYPE_U8:
-				regs[inst.a] = args[inst.b];
+				regs[inst.a] = procregs[inst.b];
 				break;
 			case JIRTYPE_F32:
-				fregs[inst.a] = fargs[inst.b];
+				fregs[inst.a] = fprocregs[inst.b];
 				break;
 			case JIRTYPE_F64:
-				f64regs[inst.a] = f64args[inst.b];
+				f64regs[inst.a] = f64procregs[inst.b];
 				break;
 			}
 			break;
@@ -966,7 +967,7 @@ int main(int argc, char **argv) {
 		printf("\n");
 	}
 
-	JIR_exec(instarr);
+	JIR_exec(&instarr);
 	arrfree(instarr);
 
 	return 0;
