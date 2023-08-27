@@ -1,0 +1,4 @@
+getport %1 %1
+mul imm %2 %1 10
+dumpreg %2
+ret

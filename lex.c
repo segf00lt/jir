@@ -11,7 +11,6 @@ struct DebugInfo {
 	TYPES       \
 	SEGMENTS    \
 	X(LABEL)    \
-	X(FUNCTION) \
 	X(IMM)
 
 char *keywords[] = {
@@ -33,8 +32,8 @@ size_t keywordLengths[] = {
 	X(BINLIT)    \
 	X(HEXLIT)    \
 	X(OCTLIT)    \
-	X(FLOATLIT)  \
 	X(INTLIT)    \
+	X(FLOATLIT)  \
 	X(STRLIT)    \
 	X(IDENTIFIER)
 

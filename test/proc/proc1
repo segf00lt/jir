@@ -1,0 +1,14 @@
+bframe
+getport s64 %1 %1
+mod imm %2 %1 11
+dumpreg %2
+alloc s64 %3
+stor local s64 %3 %2
+branch imm %2 3
+val %1 12
+setport s64 %1 %1
+call imm 2
+load local s64 %2 %3
+dumpreg %2
+eframe
+ret
