@@ -4,3 +4,5 @@ tags
 jir
 test_llvm.c
 test_llvm.ll
+test_llvm.s
+a.out

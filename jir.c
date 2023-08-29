@@ -47,10 +47,7 @@
 	X(HEAPALLOC)    \
 	X(HEAPFREE)     \
 	X(BITCAST)      \
-	X(ITOF)         \
-	X(FTOI)         \
-	X(UTOF)         \
-	X(FTOU)         \
+	X(TYPECAST)     \
 	X(AND)          \
 	X(OR)           \
 	X(XOR)          \
@@ -71,8 +68,8 @@
 	X(FMOD)         \
 	X(CALL)         \
 	X(RET)          \
-	X(SETPORT)   \
-	X(GETPORT)   \
+	X(SETPORT)      \
+	X(GETPORT)      \
 	X(DUMPREG)      \
 	X(DUMPREGRANGE) \
 	X(DUMPMEM)      \
@@ -81,12 +78,12 @@
 
 #define TYPES  \
 	X(S64) \
-	X(U64) \
 	X(S32) \
-	X(U32) \
 	X(S16) \
-	X(U16) \
 	X(S8)  \
+	X(U64) \
+	X(U32) \
+	X(U16) \
 	X(U8)  \
 	X(F32) \
 	X(F64)
@@ -112,6 +109,8 @@ size_t TYPE_SIZES[] = {
 #define TOKEN_TO_OP(t) (JIROP)(t - TOKEN_EQ)
 #define TOKEN_TO_TYPE(t) (JIRTYPE)((int)t - (int)TOKEN_S64)
 #define TOKEN_TO_SEGMENT(t) (JIRSEG)(t - TOKEN_LOCAL)
+
+#define SIGN_EXTEND(x, l) (-(((x >> (l-1)) << l) - x))
 
 enum JIROP {
 #define X(val) JIROP_##val,
@@ -160,14 +159,14 @@ struct JIR {
 	int a, b, c;
 	bool immediate;
 	union {
-		s64 imm_s64;
 		u64 imm_u64;
-		s32 imm_s32;
-		u32 imm_u32;
-		s16 imm_s16;
-		u16 imm_u16;
-		s8 imm_s8;
-		u8 imm_u8;
+		//s64 imm_s64;
+		//s32 imm_s32;
+		//u32 imm_u32;
+		//s16 imm_s16;
+		//u16 imm_u16;
+		//s8 imm_s8;
+		//u8 imm_u8;
 		float imm_f32;
 		double imm_f64;
 	};
@@ -178,14 +177,14 @@ struct JIRIMAGE {
 	JIR **proctab;
 	u8 *global;
 	// port_s are special registers for passing data between procedures, and in and out of the interpreter
-	s64 *port_s64;
 	u64 *port_u64;
-	s32 *port_s32;
-	u32 *port_u32;
-	s16 *port_s16;
-	u16 *port_u16;
-	s8 *port_s8;
-	u8 *port_u8;
+	//s64 *port_s64;
+	//s32 *port_s32;
+	//u32 *port_u32;
+	//s16 *port_s16;
+	//u16 *port_u16;
+	//s8 *port_s8;
+	//u8 *port_u8;
 	float *port_f32;
 	double *port_f64;
 };
@@ -340,7 +339,7 @@ void parse(Lexer *l, JIR **instarr) {
 					sscanf(l->start, "%lo", &inst.imm_u64);
 					break;
 				case TOKEN_INTLIT:
-					sscanf(l->start, "%li", &inst.imm_s64);
+					sscanf(l->start, "%li", (s64*)&inst.imm_u64);
 					break;
 				case TOKEN_FLOATLIT:
 					sscanf(l->start, "%f", &inst.imm_f32);
@@ -388,7 +387,7 @@ void parse(Lexer *l, JIR **instarr) {
 				inst.a = atoi(l->start + 1);
 				lex(l);
 				assert(l->token == TOKEN_INTLIT);
-				sscanf(l->start, "%li", &inst.imm_s64);
+				sscanf(l->start, "%li", (s64*)&inst.imm_u64);
 			} else {
 				assert(l->token == TOKEN_IDENTIFIER);
 				assert(*l->start == '%');
@@ -407,7 +406,7 @@ void parse(Lexer *l, JIR **instarr) {
 				inst.immediate = true;
 				lex(l);
 				assert(l->token == TOKEN_INTLIT);
-				sscanf(l->start, "%li", &inst.imm_s64);
+				sscanf(l->start, "%li", (s64*)&inst.imm_u64);
 			} else {
 				assert(l->token == TOKEN_IDENTIFIER);
 				assert(*l->start == '%');
@@ -480,7 +479,7 @@ void parse(Lexer *l, JIR **instarr) {
 				sscanf(l->start, "%lo", &inst.imm_u64);
 				break;
 			case TOKEN_INTLIT:
-				sscanf(l->start, "%li", &inst.imm_s64);
+				sscanf(l->start, "%li", (s64*)&inst.imm_u64);
 				break;
 			case TOKEN_FLOATLIT:
 				sscanf(l->start, "%f", &inst.imm_f32);
@@ -537,7 +536,7 @@ void parse(Lexer *l, JIR **instarr) {
 					sscanf(l->start, "%lo", &inst.imm_u64);
 					break;
 				case TOKEN_INTLIT:
-					sscanf(l->start, "%li", &inst.imm_s64);
+					sscanf(l->start, "%li", (s64*)&inst.imm_u64);
 					break;
 				case TOKEN_FLOATLIT:
 					sscanf(l->start, "%f", &inst.imm_f32);
@@ -576,13 +575,12 @@ void parse(Lexer *l, JIR **instarr) {
 }
 
 void JIR_print(JIR inst) {
-	printf("opcode: %s\ntype: %s\ntype2: %s\na: %i\nb: %i\nc: %i\nimmediate: %i\nimm_s64: %li\nimm_u64: %lu\nimm_f32: %f\nimm_f64: %lf\n",
+	printf("opcode: %s\ntype: %s\ntype2: %s\na: %i\nb: %i\nc: %i\nimmediate: %i\nimm_u64: %lu\nimm_f32: %f\nimm_f64: %lf\n",
 	opcodesDebug[inst.opcode],
 	typesDebug[inst.type],
 	typesDebug[inst.type2],
 	inst.a, inst.b, inst.c,
 	inst.immediate,
-	inst.imm_s64,
 	inst.imm_u64,
 	inst.imm_f32,
 	inst.imm_f64);
@@ -594,10 +592,30 @@ void JIR_exec(JIRIMAGE image) {
 	float reg_f[32] = {0};
 	double reg_f64[32] = {0};
 
-	s64 *port_s64 = image.port_s64;
+	//s64 *port_s64 = image.port_s64;
 	u64 *port_u64 = image.port_u64;
 	float *port_f32 = image.port_f32;
 	double *port_f64 = image.port_f64;
+
+	u64 iarithMasks[] = {
+		0xffffffffffffffff, // S64
+		0xffffffff, // S32
+		0xffff, // S16
+		0xff, // S8
+		0xffffffffffffffff, // U64
+		0xffffffff, // U32
+		0xffff, // U16
+		0xff, // U8
+		0x0, // F32
+		0x0, // F64
+	};
+
+	u64 iarithBits[] = {
+		64, 32, 16, 8, 
+		64, 32, 16, 8, 
+		0x0, // F32
+		0x0, // F64
+	};
 
 	u8 *global = image.global;
 	u8 *local = calloc(0x1000, sizeof(u8));
@@ -605,28 +623,40 @@ void JIR_exec(JIRIMAGE image) {
 	long local_pos = 0;
 	long localbase_pos = 0;
 
+	u8 *segptr = NULL;
+	u8 *segTable[] = { local, global, NULL };
+
 	u64 procidStack[64] = {0};
 	u64 pcStack[64] = {0};
 	u64 calldepth = 0;
 
-	u8 *segptr = NULL;
 
 	bool run = true;
 	bool dojump = false;
+	bool issignedint = false;
 	u64 procid = 0;
 	u64 pc = 0;
 	
 	JIR *proc = image.proctab[procid];
 
 	// TODO
-	// refactor switch statements, interpreter should be <250 lines
-	// add labels
-	// type int arith ops
 	// add floating point ops
+	// add labels
 
 	while(pc < arrlen(proc)) {
 		JIR inst = proc[pc];
 		u64 newpc = pc + 1;
+		u64 imask = iarithMasks[inst.type];
+		u64 ileft = reg[inst.b] & imask;
+		u64 iright = (inst.immediate ? inst.imm_u64 : reg[inst.c]) & imask;
+		f32 f32right = inst.immediate ? inst.imm_f32 : reg_f[inst.c];
+		f64 f64right = inst.immediate ? inst.imm_f64 : reg_f[inst.c];
+
+		issignedint = (inst.type >= JIRTYPE_S64 && inst.type <= JIRTYPE_S8);
+		if(issignedint) {
+			ileft = SIGN_EXTEND(ileft, iarithBits[inst.type]);
+			iright = SIGN_EXTEND(iright, iarithBits[inst.type]);
+		}
 
 		switch(inst.opcode) {
 		default:
@@ -635,251 +665,133 @@ void JIR_exec(JIRIMAGE image) {
 			break;
 		case JIROP_DUMPREG:
 			if(inst.type == JIRTYPE_F32)
-				printf("float reg %i: %f\n", inst.a, reg_f[inst.a]);
+				printf("f32 reg %i: %f\n", inst.a, reg_f[inst.a]);
 			else if(inst.type == JIRTYPE_F64)
-				printf("float64 reg %i: %g\n", inst.a, reg_f64[inst.a]);
+				printf("f64 reg %i: %g\n", inst.a, reg_f64[inst.a]);
 			else
 				printf("reg %i: %li\n", inst.a, reg[inst.a]);
 			break;
 		case JIROP_ADD:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] + inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] + reg[inst.c];
-			}
+			reg[inst.a] = ileft + iright;
 			break;
 		case JIROP_SUB:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] - inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] - reg[inst.c];
-			}
+			reg[inst.a] = ileft - iright;
 			break;
 		case JIROP_MUL:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] * inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] * reg[inst.c];
-			}
+			reg[inst.a] = ileft * iright;
 			break;
 		case JIROP_DIV:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] / inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] / reg[inst.c];
-			}
+			reg[inst.a] = ileft / iright;
 			break;
 		case JIROP_MOD:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] % inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] % reg[inst.c];
-			}
-			break;
-		case JIROP_EQ:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] == inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] == reg[inst.c];
-			}
-			break;
-		case JIROP_NE:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] != inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] != reg[inst.c];
-			}
-			break;
-		case JIROP_LE:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] <= inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] <= reg[inst.c];
-			}
-			break;
-		case JIROP_GT:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] > inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] > reg[inst.c];
-			}
-			break;
-		case JIROP_LT:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] < inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] < reg[inst.c];
-			}
-			break;
-		case JIROP_GE:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] >= inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] >= reg[inst.c];
-			}
+			reg[inst.a] = ileft % iright;
 			break;
 		case JIROP_AND:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] & inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] & reg[inst.c];
-			}
+			reg[inst.a] = ileft & iright;
 			break;
 		case JIROP_OR:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] | inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] | reg[inst.c];
-			}
+			reg[inst.a] = ileft | iright;
 			break;
 		case JIROP_XOR:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] ^ inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] ^ reg[inst.c];
-			}
+			reg[inst.a] = ileft ^ iright;
 			break;
 		case JIROP_LSHIFT:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] << inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] << reg[inst.c];
-			}
+			reg[inst.a] = ileft << iright;
 			break;
 		case JIROP_RSHIFT:
-			if(inst.immediate) {
-				reg[inst.a] = reg[inst.b] >> inst.imm_s64;
-			} else {
-				reg[inst.a] = reg[inst.b] >> reg[inst.c];
-			}
+			reg[inst.a] = ileft >> iright;
+			break;
+
+		case JIROP_EQ:
+			reg[inst.a] = (bool)(ileft == iright);
+			break;
+		case JIROP_NE:
+			reg[inst.a] = (bool)(ileft != iright);
+			break;
+		case JIROP_LE:
+			if(issignedint)
+				reg[inst.a] = (bool)((s64)ileft <= (s64)iright);
+			else
+				reg[inst.a] = ileft <= iright;
+			break;
+		case JIROP_GT:
+			if(issignedint)
+				reg[inst.a] = (bool)((s64)ileft > (s64)iright);
+			else
+				reg[inst.a] = ileft > iright;
+			break;
+		case JIROP_LT:
+			if(issignedint)
+				reg[inst.a] = (bool)((s64)ileft < (s64)iright);
+			else
+				reg[inst.a] = ileft < iright;
+			break;
+		case JIROP_GE:
+			if(issignedint)
+				reg[inst.a] = (bool)((s64)ileft >= (s64)iright);
+			else
+				reg[inst.a] = ileft >= iright;
 			break;
 
 		case JIROP_JMP:
-			if(inst.immediate) {
-				newpc = pc + inst.imm_s64;
-			} else {
-				newpc = pc + (s64)reg[inst.a];
-			}
+			if(inst.immediate)
+				newpc = (s64)pc + (s64)inst.imm_u64;
+			else
+				newpc = (s64)pc + (s64)reg[inst.a];
 			break;
 		case JIROP_BRANCH:
 			dojump = (bool)reg[inst.a];
 			if(dojump) {
-				if(inst.immediate) {
-					newpc = pc + inst.imm_s64;
-				} else {
+				if(inst.immediate)
+					newpc = pc + (s64)inst.imm_u64;
+				else
 					newpc = pc + (s64)reg[inst.b];
-				}
 			}
 			break;
 
-		//TODO memory ops
 		case JIROP_VAL:
-			switch(inst.type) {
-			case JIRTYPE_S64: case JIRTYPE_S32: case JIRTYPE_S16: case JIRTYPE_S8:
-				reg[inst.a] = inst.imm_s64;
-				break;
-			case JIRTYPE_U64: case JIRTYPE_U32: case JIRTYPE_U16: case JIRTYPE_U8:
-				reg[inst.a] = inst.imm_u64;
-				break;
-			case JIRTYPE_F32:
+			if(inst.type == JIRTYPE_F32) {
 				reg_f[inst.a] = inst.imm_f32;
-				break;
-			case JIRTYPE_F64:
+			} else if(inst.type == JIRTYPE_F64) {
 				reg_f64[inst.a] = inst.imm_f64;
-				break;
+			} else {
+				reg[inst.a] = inst.imm_u64 & imask;
+				if(issignedint)
+					reg[inst.a] = SIGN_EXTEND(reg[inst.a], iarithBits[inst.type]);
 			}
 			break;
 		case JIROP_MOVE:
-			reg[inst.a] = reg[inst.b];
+			reg[inst.a] = reg[inst.b] & imask;
 			break;
 		case JIROP_LOAD:
-			switch(inst.seg) {
-			case JIRSEG_LOCAL:
-				segptr = local;
-				break;
-			case JIRSEG_GLOBAL:
-				segptr = global;
-				break;
-			case JIRSEG_HEAP:
+			segptr = segTable[inst.seg];
+			if(inst.seg == JIRSEG_HEAP) {
 				assert("heap segment unimplemented" && 0);
-				break;
 			}
-			switch(inst.type) {
-			case JIRTYPE_S64:
-				reg[inst.a] = *(s64*)(segptr + reg[inst.b]);
-				break;
-			case JIRTYPE_U64:
-				reg[inst.a] = *(u64*)(segptr + reg[inst.b]);
-				break;
-			case JIRTYPE_S32:
-				reg[inst.a] = *(s32*)(segptr + reg[inst.b]);
-				break;
-			case JIRTYPE_U32:
-				reg[inst.a] = *(u32*)(segptr + reg[inst.b]);
-				break;
-			case JIRTYPE_S16:
-				reg[inst.a] = *(s16*)(segptr + reg[inst.b]);
-				break;
-			case JIRTYPE_U16:
-				reg[inst.a] = *(u16*)(segptr + reg[inst.b]);
-				break;
-			case JIRTYPE_S8:
-				reg[inst.a] = *(s8*)(segptr + reg[inst.b]);
-				break;
-			case JIRTYPE_U8:
-				reg[inst.a] = *(u8*)(segptr + reg[inst.b]);
-				break;
-			case JIRTYPE_F32:
+
+			if(inst.type == JIRTYPE_F32) {
 				reg_f[inst.a] = *(float*)(segptr + reg[inst.b]);
-				break;
-			case JIRTYPE_F64:
+			} else if(inst.type == JIRTYPE_F64) {
 				reg_f64[inst.a] = *(double*)(segptr + reg[inst.b]);
-				break;
+			} else {
+				reg[inst.a] = *(u64*)(segptr + reg[inst.b]) & imask;
+				if(issignedint)
+					reg[inst.a] = SIGN_EXTEND(reg[inst.a], iarithBits[inst.type]);
 			}
 			break;
 		case JIROP_STOR:
-			switch(inst.seg) {
-			case JIRSEG_LOCAL:
-				segptr = local;
-				break;
-			case JIRSEG_GLOBAL:
-				segptr = global;
-				break;
-			case JIRSEG_HEAP:
+			segptr = segTable[inst.seg];
+			if(inst.seg == JIRSEG_HEAP) {
 				assert("heap segment unimplemented" && 0);
-				break;
 			}
-			switch(inst.type) {
-			case JIRTYPE_S64:
-				*(s64*)(segptr + reg[inst.a]) = reg[inst.b];
-				break;
-			case JIRTYPE_U64:
-				*(u64*)(segptr + reg[inst.a]) = reg[inst.b];
-				break;
-			case JIRTYPE_S32:
-				*(s32*)(segptr + reg[inst.a]) = reg[inst.b];
-				break;
-			case JIRTYPE_U32:
-				*(u32*)(segptr + reg[inst.a]) = reg[inst.b];
-				break;
-			case JIRTYPE_S16:
-				*(s16*)(segptr + reg[inst.a]) = reg[inst.b];
-				break;
-			case JIRTYPE_U16:
-				*(u16*)(segptr + reg[inst.a]) = reg[inst.b];
-				break;
-			case JIRTYPE_S8:
-				*(s8*)(segptr + reg[inst.a]) = reg[inst.b];
-				break;
-			case JIRTYPE_U8:
-				*(u8*)(segptr + reg[inst.a]) = reg[inst.b];
-				break;
-			case JIRTYPE_F32:
+
+			if(inst.type == JIRTYPE_F32) {
 				*(float*)(segptr + reg[inst.a]) = reg_f[inst.b];
-				break;
-			case JIRTYPE_F64:
+			} else if(inst.type == JIRTYPE_F64) {
 				*(double*)(segptr + reg[inst.a]) = reg_f64[inst.b];
-				break;
+			} else {
+				*(u64*)(segptr + reg[inst.a]) &= ~imask;
+				*(u64*)(segptr + reg[inst.a]) |= reg[inst.b] & imask;
 			}
 			break;
 		case JIROP_BFRAME:
@@ -918,64 +830,46 @@ void JIR_exec(JIRIMAGE image) {
 		//	break;
 
 		case JIROP_SETPORT:
+			iright = reg[inst.b] & imask;
+			f32right = reg_f[inst.b];
+			f64right = reg_f64[inst.b];
 			if(inst.immediate) {
-				switch(inst.type) {
-				case JIRTYPE_S64: case JIRTYPE_S32: case JIRTYPE_S16: case JIRTYPE_S8:
-					port_s64[inst.a] = inst.imm_s64;
-					break;
-				case JIRTYPE_U64: case JIRTYPE_U32: case JIRTYPE_U16: case JIRTYPE_U8:
-					port_u64[inst.a] = inst.imm_u64;
-					break;
-				case JIRTYPE_F32:
-					port_f32[inst.a] = inst.imm_f32;
-					break;
-				case JIRTYPE_F64:
-					port_f64[inst.a] = inst.imm_f64;
-					break;
-				}
-			} else {
-				switch(inst.type) {
-				case JIRTYPE_S64: case JIRTYPE_S32: case JIRTYPE_S16: case JIRTYPE_S8:
-					port_s64[inst.a] = reg[inst.b];
-					break;
-				case JIRTYPE_U64: case JIRTYPE_U32: case JIRTYPE_U16: case JIRTYPE_U8:
-					port_u64[inst.a] = reg[inst.b];
-					break;
-				case JIRTYPE_F32:
-					port_f32[inst.a] = reg_f[inst.b];
-					break;
-				case JIRTYPE_F64:
-					port_f64[inst.a] = reg_f64[inst.b];
-					break;
-				}
+				iright = inst.imm_u64;
+				f32right = inst.imm_f32;
+				f64right = inst.imm_f64;
 			}
+
+			if(issignedint)
+				iright = SIGN_EXTEND(iright, iarithBits[inst.type]);
+
+			if(inst.type == JIRTYPE_F32)
+				port_f32[inst.a] = f32right;
+			else if(inst.type == JIRTYPE_F64)
+				port_f64[inst.a] = f64right;
+			else
+				port_u64[inst.a] = iright;
 			break;
 		case JIROP_GETPORT:
-			switch(inst.type) {
-			case JIRTYPE_S64: case JIRTYPE_S32: case JIRTYPE_S16: case JIRTYPE_S8:
-				reg[inst.a] = port_s64[inst.b];
-				break;
-			case JIRTYPE_U64: case JIRTYPE_U32: case JIRTYPE_U16: case JIRTYPE_U8:
-				reg[inst.a] = port_u64[inst.b];
-				break;
-			case JIRTYPE_F32:
+			iright = port_u64[inst.b] & imask;
+			if(issignedint)
+				iright = SIGN_EXTEND(iright, iarithBits[inst.type]);
+
+			if(inst.type == JIRTYPE_F32)
 				reg_f[inst.a] = port_f32[inst.b];
-				break;
-			case JIRTYPE_F64:
+			else if(inst.type == JIRTYPE_F64)
 				reg_f64[inst.a] = port_f64[inst.b];
-				break;
-			}
+			else
+				reg[inst.a] = iright;
 			break;
 
 		case JIROP_CALL:
 			procidStack[calldepth] = procid;
 			pcStack[calldepth] = newpc; // store newpc so we return to the next inst
 			++calldepth;
-			if(inst.immediate) {
+			if(inst.immediate)
 				procid = inst.imm_u64;
-			} else {
+			else
 				procid = reg[inst.a];
-			}
 			proc = image.proctab[procid];
 			newpc = 0;
 			break;
@@ -1003,27 +897,27 @@ void JIR_exec(JIRIMAGE image) {
 void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u8 *global) {
 	i->proctab = proctab;
 	i->global = global;
-	i->port_s64 = malloc(64 * sizeof(s64));
 	i->port_u64 = malloc(64 * sizeof(u64));
-	i->port_s32 = malloc(64 * sizeof(s32));
-	i->port_u32 = malloc(64 * sizeof(u32));
-	i->port_s16 = malloc(64 * sizeof(s16));
-	i->port_u16 = malloc(64 * sizeof(u16));
-	i->port_s8 = malloc(64 * sizeof(s8));
-	i->port_u8 = malloc(64 * sizeof(u8));
+	//i->port_s64 = malloc(64 * sizeof(s64));
+	//i->port_s32 = malloc(64 * sizeof(s32));
+	//i->port_u32 = malloc(64 * sizeof(u32));
+	//i->port_s16 = malloc(64 * sizeof(s16));
+	//i->port_u16 = malloc(64 * sizeof(u16));
+	//i->port_s8 = malloc(64 * sizeof(s8));
+	//i->port_u8 = malloc(64 * sizeof(u8));
 	i->port_f32 = malloc(64 * sizeof(f32));
 	i->port_f64 = malloc(64 * sizeof(f64));
 }
 
 void JIRIMAGE_destroy(JIRIMAGE *i) {
-	free(i->port_s64);
 	free(i->port_u64);
-	free(i->port_s32);
-	free(i->port_u32);
-	free(i->port_s16);
-	free(i->port_u16);
-	free(i->port_s8);
-	free(i->port_u8);
+	//free(i->port_s64);
+	//free(i->port_s32);
+	//free(i->port_u32);
+	//free(i->port_s16);
+	//free(i->port_u16);
+	//free(i->port_s8);
+	//free(i->port_u8);
 	free(i->port_f32);
 	free(i->port_f64);
 	*i = (JIRIMAGE){0};
@@ -1034,6 +928,44 @@ int compareProcFiles(const void *a, const void *b) {
 }
 
 int main(int argc, char **argv) {
+	{
+		Fmap fm;
+		fmapopen("test/compare", O_RDONLY, &fm);
+		for(char *s = fm.buf; *s; ++s)
+			*s = toupper(*s);
+		JIR *instarr = NULL;
+		arrsetcap(instarr, 2);
+		Lexer lexer = (Lexer) {
+			.keywords = keywords,
+			.keywordsCount = ARRLEN(keywords),
+			.keywordLengths = keywordLengths,
+			.src = fm.buf,
+			.cur = fm.buf,
+			.srcEnd = fm.buf + fm.size,
+			.debugInfo = (DebugInfo){ .line = 1, .col = 1 },
+		};
+
+		parse(&lexer, &instarr);
+		printf("%zu\n", arrlen(instarr));
+		for(int i = 0; i < arrlen(instarr); ++i) {
+			printf("INST %i\n", i);
+			JIR_print(instarr[i]);
+			printf("\n");
+		}
+		fmapclose(&fm);
+
+		JIR *proctab[8] = { instarr };
+		u8 *global = calloc(0x2000, sizeof(u8));
+		JIRIMAGE image;
+		JIRIMAGE_init(&image, proctab, global);
+
+		JIR_exec(image);
+		free(global);
+		JIRIMAGE_destroy(&image);
+		arrfree(instarr);
+		instarr = NULL;
+		return 0;
+	}
 
 	printf("\n###### testing lexer ######\n\n");
 	{
