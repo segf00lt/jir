@@ -647,7 +647,6 @@ void JIR_exec(JIRIMAGE image) {
 	JIR *proc = image.proctab[procid];
 
 	// TODO
-	// add floating point ops
 	// add labels
 
 	while(pc < arrlen(proc)) {
