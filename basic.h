@@ -4,12 +4,19 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "stb_ds.h"
+#include "stb_sprintf.h"
 
 #define IS_POW_2(x) ((x & (x-1)) == 0)
 #define MAX(a,b) (((a) > (b)) ? (a) : (b))
 #define MIN(a,b) (((a) < (b)) ? (a) : (b))
-#define ARRLEN(x) (sizeof(x)/sizeof(*x))
+#define STATICARRLEN(x) (sizeof(x)/sizeof(*x))
 #define STRLEN(x) ((sizeof(x)/sizeof(*x))-1)
+#define SIGN_EXTEND(x, l) (-(((x >> (l-1)) << l) - x))
+#define Arr(T) T *
+#define Map(K, V) struct { K key; V value; } *
+#define Dict(V) struct { char *key; V value; } *
+
 typedef int64_t s64;
 typedef uint64_t u64;
 typedef int32_t s32;
@@ -20,20 +27,5 @@ typedef int8_t s8;
 typedef uint8_t u8;
 typedef float f32;
 typedef double f64;
-uintptr_t align_ptr_forward(uintptr_t ptr, size_t align);
-
-#ifdef JLIB_BASIC_IMPL
-
-uintptr_t align_ptr_forward(uintptr_t ptr, size_t align) {
-	uintptr_t p, a, mod;
-	assert(IS_POW_2(align));
-	p = ptr;
-	a = (uintptr_t)align;
-	mod = p & (a-1);
-	if(mod) p += a - mod;
-	return p;
-}
-
-#endif
 
 #endif

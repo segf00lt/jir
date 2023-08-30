@@ -16,6 +16,8 @@
 #include "basic.h"
 #include "stb_sprintf.h"
 #include "stb_ds.h"
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #undef sprintf
 #undef snprintf
@@ -23,12 +25,30 @@
 #define snprintf stbsp_snprintf
 
 #define OPCODES         \
+	X(AND)          \
+	X(OR)           \
+	X(XOR)          \
+	X(LSHIFT)       \
+	X(RSHIFT)       \
+	X(NOT)          \
+	X(ADD)          \
+	X(SUB)          \
+	X(MUL)          \
+	X(DIV)          \
+	X(MOD)          \
+	X(NEG)          \
 	X(EQ)           \
 	X(NE)           \
 	X(LE)           \
 	X(GT)           \
 	X(LT)           \
 	X(GE)           \
+	X(FADD)         \
+	X(FSUB)         \
+	X(FMUL)         \
+	X(FDIV)         \
+	X(FMOD)         \
+	X(FNEG)         \
 	X(FEQ)          \
 	X(FNE)          \
 	X(FLE)          \
@@ -49,24 +69,6 @@
 	X(HEAPFREE)     \
 	X(BITCAST)      \
 	X(TYPECAST)     \
-	X(AND)          \
-	X(OR)           \
-	X(XOR)          \
-	X(LSHIFT)       \
-	X(RSHIFT)       \
-	X(NOT)          \
-	X(NEG)          \
-	X(FNEG)         \
-	X(ADD)          \
-	X(SUB)          \
-	X(MUL)          \
-	X(DIV)          \
-	X(MOD)          \
-	X(FADD)         \
-	X(FSUB)         \
-	X(FMUL)         \
-	X(FDIV)         \
-	X(FMOD)         \
 	X(CALL)         \
 	X(RET)          \
 	X(SETPORT)      \
@@ -75,6 +77,9 @@
 	X(DUMPREGRANGE) \
 	X(DUMPMEM)      \
 	X(DUMPMEMRANGE) \
+	X(SYSCALL)      \
+	X(BASELOCAL)    \
+	X(BASEGLOBAL)   \
 	X(HALT)
 
 #define TYPES  \
@@ -86,6 +91,7 @@
 	X(U32) \
 	X(U16) \
 	X(U8)  \
+	X(PTR) \
 	X(F32) \
 	X(F64)
 
@@ -107,7 +113,7 @@ size_t TYPE_SIZES[] = {
 	X(GLOBAL)  \
 	X(HEAP)
 
-#define TOKEN_TO_OP(t) (JIROP)(t - TOKEN_EQ)
+#define TOKEN_TO_OP(t) (JIROP)(t - TOKEN_AND)
 #define TOKEN_TO_TYPE(t) (JIRTYPE)((int)t - (int)TOKEN_S64)
 #define TOKEN_TO_SEGMENT(t) (JIRSEG)(t - TOKEN_LOCAL)
 
@@ -175,7 +181,7 @@ struct JIR {
 typedef struct JIR JIR;
 
 struct JIRIMAGE {
-	JIR **proctab;
+	Arr(JIR) *proctab;
 	u8 *global;
 	// port_s are special registers for passing data between procedures, and in and out of the interpreter
 	u64 *port_u64;
@@ -193,7 +199,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 
 #include "lex.c"
 
-void parse(Lexer *l, JIR **instarr) {
+void parse(Lexer *l, Arr(JIR) *instarr) {
 	char debugBuf[64];
 	JIR inst;
 	Token token;
@@ -220,6 +226,7 @@ void parse(Lexer *l, JIR **instarr) {
 	 * move type dest_reg src_reg
 	 * memset segment type start_reg count_reg val_imm
 	 * alloc type
+	 * alloc immediate imm_bytes
 	 * heapalloc ptr_dest_reg size_reg
 	 * heapalloc "imm" ptr_dest_reg size_imm
 	 * heapfree ptr_reg
@@ -241,6 +248,22 @@ void parse(Lexer *l, JIR **instarr) {
 			snprintf(debugBuf, l->debugInfo.end-l->debugInfo.start, "%s", l->debugInfo.start);
 			error(1, 0, "unrecognized token %s at line %zu, col %zu\n>\t%s", 
 					tokenDebug[l->token-TOKEN_INVALID], l->debugInfo.line, l->debugInfo.col, debugBuf);
+			break;
+		case TOKEN_HALT: // NOTE redundant?
+		case TOKEN_RET:
+		case TOKEN_SYSCALL:
+		case TOKEN_BFRAME: case TOKEN_EFRAME:
+			inst.opcode = TOKEN_TO_OP(token);
+			arrput(*instarr, inst);
+			break;
+		case TOKEN_BASELOCAL:
+		case TOKEN_BASEGLOBAL:
+			inst.opcode = TOKEN_TO_OP(token);
+			lex(l);
+			assert(l->token == TOKEN_IDENTIFIER);
+			assert(*l->start == '%');
+			inst.a = atoi(l->start + 1);
+			arrput(*instarr, inst);
 			break;
 		case TOKEN_CALL:
 			inst.opcode = JIROP_CALL;
@@ -271,14 +294,6 @@ void parse(Lexer *l, JIR **instarr) {
 				assert(*l->start == '%');
 				inst.a = atoi(l->start + 1);
 			}
-			arrput(*instarr, inst);
-			break;
-		case TOKEN_RET:
-			inst.opcode = JIROP_RET;
-			arrput(*instarr, inst);
-			break;
-		case TOKEN_HALT: // NOTE redundant?
-			inst.opcode = JIROP_HALT;
 			arrput(*instarr, inst);
 			break;
 		case TOKEN_DUMPREG:
@@ -437,20 +452,36 @@ void parse(Lexer *l, JIR **instarr) {
 			inst.b = atoi(l->start + 1);
 			arrput(*instarr, inst);
 			break;       
-		case TOKEN_BFRAME: case TOKEN_EFRAME:
-			inst.opcode = TOKEN_TO_OP(token);
-			arrput(*instarr, inst);
-			break;
 		case TOKEN_ALLOC:
 			inst.opcode = JIROP_ALLOC;
 			lex(l);
 			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
 				inst.type = TOKEN_TO_TYPE(l->token);
 				lex(l);
+				assert(l->token == TOKEN_IDENTIFIER);
+				assert(*l->start == '%');
+				inst.a = atoi(l->start + 1);
+			} else if(l->token == TOKEN_IMM) {
+				lex(l);
+				assert(l->token >= TOKEN_BINLIT && l->token <= TOKEN_INTLIT);
+				switch(l->token) {
+				case TOKEN_BINLIT:
+					assert(0);
+					break;
+				case TOKEN_HEXLIT:
+					sscanf(l->start, "%lx", &inst.imm_u64);
+					break;
+				case TOKEN_OCTLIT:
+					sscanf(l->start, "%lo", &inst.imm_u64);
+					break;
+				case TOKEN_INTLIT:
+					sscanf(l->start, "%lu", &inst.imm_u64);
+					break;
+				default:
+					assert(0);
+					break;
+				}
 			}
-			assert(l->token == TOKEN_IDENTIFIER);
-			assert(*l->start == '%');
-			inst.a = atoi(l->start + 1);
 			arrput(*instarr, inst);
 			break;
 		case TOKEN_HEAPALLOC:
@@ -638,6 +669,7 @@ void JIR_exec(JIRIMAGE image) {
 	u64 calldepth = 0;
 
 
+	long syscall_success = 0;
 	bool run = true;
 	bool dojump = false;
 	bool issignedint = false;
@@ -807,8 +839,13 @@ void JIR_exec(JIRIMAGE image) {
 			local_pos = localbase[--localbase_pos];
 			break;
 		case JIROP_ALLOC:
-			reg[inst.a] = local_pos;
-			local_pos += TYPE_SIZES[inst.type];
+			if(inst.immediate) {
+				reg[inst.a] = local_pos;
+				local_pos += inst.imm_u64;
+			} else {
+				reg[inst.a] = local_pos;
+				local_pos += TYPE_SIZES[inst.type];
+			}
 			break;
 
 		case JIROP_FADD:
@@ -929,6 +966,48 @@ void JIR_exec(JIRIMAGE image) {
 			proc = image.proctab[procid];
 			break;
 
+		case JIROP_SYSCALL:
+			/*
+			 * Linux syscalls
+			 *
+			 * 0	sys_read	unsigned int fd      char *buf	        size_t count
+			 * 1	sys_write	unsigned int fd      const char *buf	size_t count
+			 * 2	sys_open	const char *filename int flags          int mode
+			 * 3	sys_close	unsigned int fd
+			 */
+			switch(port_u64[0]) {
+			case 0: // sys_read(unsigned int fd, char *buf, size_t count)
+				syscall_success = syscall(0,
+					(unsigned int)port_u64[1],
+					(char *)port_u64[2],
+					(size_t)port_u64[3]);
+				break;
+			case 1: // sys_write(unsigned int fd, const char *buf, size_t count)
+				syscall_success = syscall(1,
+					(unsigned int)port_u64[1],
+					(char *)port_u64[2],
+					(size_t)port_u64[3]);
+				break;
+			case 2: // sys_open(const char *filenamem, int flags, int mode)
+				syscall_success = syscall(2,
+					(char *)port_u64[1],
+					(int)port_u64[2],
+					(int)port_u64[3]);
+				break;
+			case 3: // sys_close(unsigned int fd)
+				syscall_success = syscall(3,
+					(unsigned int)port_u64[1]);
+				break;
+			}
+			assert("syscall failed" && (syscall_success != -1));
+			break;
+
+		case JIROP_BASELOCAL:
+		case JIROP_BASEGLOBAL:
+			reg[inst.a] = (u64)(segTable[inst.opcode-JIROP_BASELOCAL]
+					+ (!(inst.opcode-JIROP_BASELOCAL) && localbase_pos));
+			break;
+
 		case JIROP_HALT:
 			run = false;
 			break;
@@ -977,6 +1056,47 @@ int compareProcFiles(const void *a, const void *b) {
 }
 
 int main(int argc, char **argv) {
+	printf("\n###### testing syscall ######\n\n");
+	{
+		Fmap fm;
+		fmapopen("test/syscall", O_RDONLY, &fm);
+		for(char *s = fm.buf; *s; ++s)
+			*s = toupper(*s);
+		JIR *instarr = NULL;
+		arrsetcap(instarr, 2);
+		Lexer lexer = (Lexer) {
+			.keywords = keywords,
+			.keywordsCount = STATICARRLEN(keywords),
+			.keywordLengths = keywordLengths,
+			.src = fm.buf,
+			.cur = fm.buf,
+			.srcEnd = fm.buf + fm.size,
+			.debugInfo = (DebugInfo){ .line = 1, .col = 1 },
+		};
+
+		parse(&lexer, &instarr);
+		//printf("%zu\n", arrlen(instarr));
+		//for(int i = 0; i < arrlen(instarr); ++i) {
+		//	printf("INST %i\n", i);
+		//	JIR_print(instarr[i]);
+		//	printf("\n");
+		//}
+		//fmapclose(&fm);
+
+		JIR *proctab[8] = { instarr };
+		u8 *global = calloc(0x2000, sizeof(u8));
+		strcpy((char*)global, "Hello, World!\n");
+		JIRIMAGE image;
+		JIRIMAGE_init(&image, proctab, global);
+
+		JIR_exec(image);
+		free(global);
+		JIRIMAGE_destroy(&image);
+		arrfree(instarr);
+		instarr = NULL;
+		return 0;
+	}
+
 	printf("\n###### testing float ops ######\n\n");
 	{
 		Fmap fm;
@@ -987,7 +1107,7 @@ int main(int argc, char **argv) {
 		arrsetcap(instarr, 2);
 		Lexer lexer = (Lexer) {
 			.keywords = keywords,
-			.keywordsCount = ARRLEN(keywords),
+			.keywordsCount = STATICARRLEN(keywords),
 			.keywordLengths = keywordLengths,
 			.src = fm.buf,
 			.cur = fm.buf,
@@ -1014,7 +1134,6 @@ int main(int argc, char **argv) {
 		JIRIMAGE_destroy(&image);
 		arrfree(instarr);
 		instarr = NULL;
-		return 0;
 	}
 
 	printf("\n###### testing integer comparisons ######\n\n");
@@ -1027,7 +1146,7 @@ int main(int argc, char **argv) {
 		arrsetcap(instarr, 2);
 		Lexer lexer = (Lexer) {
 			.keywords = keywords,
-			.keywordsCount = ARRLEN(keywords),
+			.keywordsCount = STATICARRLEN(keywords),
 			.keywordLengths = keywordLengths,
 			.src = fm.buf,
 			.cur = fm.buf,
@@ -1054,7 +1173,6 @@ int main(int argc, char **argv) {
 		JIRIMAGE_destroy(&image);
 		arrfree(instarr);
 		instarr = NULL;
-		return 0;
 	}
 
 	printf("\n###### testing lexer ######\n\n");
@@ -1065,7 +1183,7 @@ int main(int argc, char **argv) {
 			*s = toupper(*s);
 		Lexer lexer = (Lexer) {
 			.keywords = keywords,
-			.keywordsCount = ARRLEN(keywords),
+			.keywordsCount = STATICARRLEN(keywords),
 			.keywordLengths = keywordLengths,
 			.src = fm.buf,
 			.cur = fm.buf,
@@ -1089,7 +1207,7 @@ int main(int argc, char **argv) {
 		arrsetcap(instarr, 2);
 		Lexer lexer = (Lexer) {
 			.keywords = keywords,
-			.keywordsCount = ARRLEN(keywords),
+			.keywordsCount = STATICARRLEN(keywords),
 			.keywordLengths = keywordLengths,
 			.src = fm.buf,
 			.cur = fm.buf,
@@ -1135,7 +1253,7 @@ int main(int argc, char **argv) {
 				*s = toupper(*s);
 			Lexer lexer = (Lexer) {
 				.keywords = keywords,
-				.keywordsCount = ARRLEN(keywords),
+				.keywordsCount = STATICARRLEN(keywords),
 				.keywordLengths = keywordLengths,
 				.src = fm.buf,
 				.cur = fm.buf,
