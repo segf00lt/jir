@@ -802,7 +802,7 @@ void JIR_exec(JIRIMAGE image) {
 			else if(inst.type == JIRTYPE_F64)
 				printf("f64 reg %i: %g\n", inst.a, reg_f64[inst.a]);
 			else
-				printf("reg %i: %lx\n", inst.a, reg[inst.a]);
+				printf("reg %i: 0x%lx\n", inst.a, reg[inst.a]);
 			break;
 
 		case JIROP_BITCAST:
@@ -1281,7 +1281,6 @@ int main(int argc, char **argv) {
 		JIRIMAGE_destroy(&image);
 		arrfree(instarr);
 		instarr = NULL;
-		return 0;
 	}
 
 	printf("\n###### testing unaryops ######\n\n");
