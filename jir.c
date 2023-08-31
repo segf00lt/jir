@@ -60,15 +60,10 @@
 	X(LOAD)         \
 	X(STOR)         \
 	X(VAL)          \
-	X(MEMSET)       \
 	X(MOVE)         \
 	X(BFRAME)       \
 	X(EFRAME)       \
 	X(ALLOC)        \
-	X(HEAPALLOC)    \
-	X(HEAPFREE)     \
-	X(BITCAST)      \
-	X(TYPECAST)     \
 	X(CALL)         \
 	X(RET)          \
 	X(SETARG)       \
@@ -78,13 +73,28 @@
 	X(SETPORT)      \
 	X(GETPORT)      \
 	X(DUMPREG)      \
+	X(SYSCALL)      \
+	X(MEMSET)       \
+	X(HEAPALLOC)    \
+	X(HEAPFREE)     \
+	X(BITCAST)      \
+	X(TYPECAST)     \
 	X(DUMPREGRANGE) \
 	X(DUMPMEM)      \
 	X(DUMPMEMRANGE) \
-	X(SYSCALL)      \
 	X(HALT)
 
-//TODO add ptr type
+/* TODO
+ *
+ * BITCAST TYPECAST (pointers)
+ * MEMSET
+ * HEAPALLOC
+ * HEAPFREE
+ * DUMPREGRANGE
+ * DUMPMEM
+ * DUMPMEMRANGE
+ */
+
 #define TYPES         \
 	X(S64)        \
 	X(S32)        \
@@ -247,6 +257,25 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 			snprintf(debugBuf, l->debugInfo.end-l->debugInfo.start, "%s", l->debugInfo.start);
 			error(1, 0, "unrecognized token %s at line %zu, col %zu\n>\t%s", 
 					tokenDebug[l->token-TOKEN_INVALID], l->debugInfo.line, l->debugInfo.col, debugBuf);
+			break;
+		case TOKEN_TYPECAST:
+		case TOKEN_BITCAST:
+			inst.opcode = TOKEN_TO_OP(token);
+			lex(l);
+			assert(l->token >= TOKEN_S64 && l->token <= TOKEN_F64);
+			inst.type = TOKEN_TO_TYPE(l->token);
+			lex(l);
+			assert(l->token >= TOKEN_S64 && l->token <= TOKEN_F64);
+			inst.type2 = TOKEN_TO_TYPE(l->token);
+			lex(l);
+			assert(l->token == TOKEN_IDENTIFIER);
+			assert(*l->start == '%');
+			inst.a = atoi(l->start + 1);
+			lex(l);
+			assert(l->token == TOKEN_IDENTIFIER);
+			assert(*l->start == '%');
+			inst.c = atoi(l->start + 1);
+			arrput(*instarr, inst);
 			break;
 		case TOKEN_HALT: // NOTE redundant?
 		case TOKEN_RET:
@@ -676,6 +705,7 @@ void JIR_print(JIR inst) {
 	inst.procid);
 }
 
+// TODO interpreter backtrace trace
 void JIR_exec(JIRIMAGE image) {
 
 	u64 reg[32] = {0};
@@ -748,6 +778,12 @@ void JIR_exec(JIRIMAGE image) {
 		u64 iright = (inst.immediate ? inst.imm_u64 : reg[inst.c]) & imask;
 		f32 f32right = inst.immediate ? inst.imm_f32 : reg_f32[inst.c];
 		f64 f64right = inst.immediate ? inst.imm_f64 : reg_f64[inst.c];
+		bool type_a_int = (inst.type >= JIRTYPE_S64 && inst.type <= JIRTYPE_U8);
+		bool type_c_int = (inst.type2 >= JIRTYPE_S64 && inst.type2 <= JIRTYPE_U8);
+		bool type_a_f32 = (inst.type == JIRTYPE_F32);
+		bool type_c_f32 = (inst.type2 == JIRTYPE_F32);
+		bool type_a_f64 = (inst.type == JIRTYPE_F64);
+		bool type_c_f64 = (inst.type2 == JIRTYPE_F64);
 
 		issignedint = (inst.type >= JIRTYPE_S64 && inst.type <= JIRTYPE_S8);
 		if(issignedint) {
@@ -766,7 +802,51 @@ void JIR_exec(JIRIMAGE image) {
 			else if(inst.type == JIRTYPE_F64)
 				printf("f64 reg %i: %g\n", inst.a, reg_f64[inst.a]);
 			else
-				printf("reg %i: %li\n", inst.a, reg[inst.a]);
+				printf("reg %i: %lx\n", inst.a, reg[inst.a]);
+			break;
+
+		case JIROP_BITCAST:
+			if(type_a_int && type_c_int) {
+				reg[inst.a] = reg[inst.c] & iarithMasks[inst.type2];
+			} else if(type_a_f64 && type_c_int) {
+				iright = reg[inst.c] & iarithMasks[inst.type2];
+				reg_f64[inst.a] = *(double*)&iright;
+			} else if(type_a_f32 && type_c_int) {
+				iright = reg[inst.c] & iarithMasks[inst.type2];
+				reg_f32[inst.a] = *(float*)&iright;
+			} else if(type_a_int && type_c_f64) {
+				reg[inst.a] = *(u64*)(reg_f64 + inst.c) & iarithMasks[inst.type];
+			} else if(type_a_int && type_c_f32) {
+				reg[inst.a] = *(u64*)(reg_f32 + inst.c) & iarithMasks[inst.type];
+			} else if(type_a_f32 && type_c_f64) {
+				reg_f32[inst.a] = *(float*)(reg_f64 + inst.c);
+			} else if(type_a_f64 && type_c_f32) {
+				reg_f64[inst.a] = *(double*)(reg_f32 + inst.c);
+			} else {
+				// TODO pointers
+				assert("illegal bitcast" && 0);
+			}
+			break;
+
+		case JIROP_TYPECAST:
+			if(type_a_int && type_c_int) {
+				reg[inst.a] = reg[inst.c] & iarithMasks[inst.type2];
+			} else if(type_a_f64 && type_c_int) {
+				reg_f64[inst.a] = (double)(reg[inst.c] & iarithMasks[inst.type2]);
+			} else if(type_a_f32 && type_c_int) {
+				reg_f32[inst.a] = (float)(reg[inst.c] & iarithMasks[inst.type2]);
+			} else if(type_a_int && type_c_f64) {
+				reg[inst.a] = (s64)reg_f64[inst.c] & iarithMasks[inst.type];
+			} else if(type_a_int && type_c_f32) {
+				reg[inst.a] = (s64)reg_f32[inst.c] & iarithMasks[inst.type];
+			} else if(type_a_f32 && type_c_f64) {
+				reg_f32[inst.a] = (float)reg_f64[inst.c];
+			} else if(type_a_f64 && type_c_f32) {
+				reg_f64[inst.a] = (double)reg_f32[inst.c];
+			} else {
+				// TODO pointers
+				assert("illegal bitcast" && 0);
+			}
 			break;
 
 		case JIROP_NOT:
@@ -1165,7 +1245,46 @@ int compareProcFiles(const void *a, const void *b) {
 }
 
 int main(int argc, char **argv) {
-	printf("\n###### testing syscall ######\n\n");
+	printf("\n###### testing bitcasts ######\n\n");
+	{
+		Fmap fm;
+		fmapopen("test/bitcast", O_RDONLY, &fm);
+		for(char *s = fm.buf; *s; ++s)
+			*s = toupper(*s);
+		JIR *instarr = NULL;
+		arrsetcap(instarr, 2);
+		Lexer lexer = (Lexer) {
+			.keywords = keywords,
+			.keywordsCount = STATICARRLEN(keywords),
+			.keywordLengths = keywordLengths,
+			.src = fm.buf,
+			.cur = fm.buf,
+			.srcEnd = fm.buf + fm.size,
+			.debugInfo = (DebugInfo){ .line = 1, .col = 1 },
+		};
+
+		parse(&lexer, &instarr);
+		for(int i = 0; i < arrlen(instarr); ++i) {
+			printf("INST %i\n", i);
+			JIR_print(instarr[i]);
+			printf("\n");
+		}
+		fmapclose(&fm);
+
+		JIR *proctab[8] = { instarr };
+		u8 *global = calloc(0x2000, sizeof(u8));
+		JIRIMAGE image;
+		JIRIMAGE_init(&image, proctab, global);
+
+		JIR_exec(image);
+		free(global);
+		JIRIMAGE_destroy(&image);
+		arrfree(instarr);
+		instarr = NULL;
+		return 0;
+	}
+
+	printf("\n###### testing unaryops ######\n\n");
 	{
 		Fmap fm;
 		fmapopen("test/unaryops", O_RDONLY, &fm);
@@ -1201,7 +1320,6 @@ int main(int argc, char **argv) {
 		JIRIMAGE_destroy(&image);
 		arrfree(instarr);
 		instarr = NULL;
-		return 0;
 	}
 
 	printf("\n###### testing syscall ######\n\n");
