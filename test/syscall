@@ -1,7 +1,5 @@
-setport imm %0 1
-setport imm %1 1
-baseglobal %2
-setport u64 %2 %2
-setport imm u64 %3 14
-syscall
+setarg imm %0 1
+setarg imm ptr_global %1 0
+setarg imm u64 %2 14
+syscall 1
 halt

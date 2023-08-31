@@ -71,6 +71,10 @@
 	X(TYPECAST)     \
 	X(CALL)         \
 	X(RET)          \
+	X(SETARG)       \
+	X(GETARG)       \
+	X(SETRET)       \
+	X(GETRET)       \
 	X(SETPORT)      \
 	X(GETPORT)      \
 	X(DUMPREG)      \
@@ -78,21 +82,22 @@
 	X(DUMPMEM)      \
 	X(DUMPMEMRANGE) \
 	X(SYSCALL)      \
-	X(BASELOCAL)    \
-	X(BASEGLOBAL)   \
 	X(HALT)
 
-#define TYPES  \
-	X(S64) \
-	X(S32) \
-	X(S16) \
-	X(S8)  \
-	X(U64) \
-	X(U32) \
-	X(U16) \
-	X(U8)  \
-	X(PTR) \
-	X(F32) \
+//TODO add ptr type
+#define TYPES         \
+	X(S64)        \
+	X(S32)        \
+	X(S16)        \
+	X(S8)         \
+	X(U64)        \
+	X(U32)        \
+	X(U16)        \
+	X(U8)         \
+	X(PTR_LOCAL)  \
+	X(PTR_GLOBAL) \
+	X(PTR_HEAP)   \
+	X(F32)        \
 	X(F64)
 
 size_t TYPE_SIZES[] = {
@@ -104,6 +109,7 @@ size_t TYPE_SIZES[] = {
 	2, // u16
 	1, // s8
 	1, // u8
+	8,8,8, // ptr
 	4, // f32
 	8, // f64
 };
@@ -167,15 +173,9 @@ struct JIR {
 	bool immediate;
 	union {
 		u64 imm_u64;
-		//s64 imm_s64;
-		//s32 imm_s32;
-		//u32 imm_u32;
-		//s16 imm_s16;
-		//u16 imm_u16;
-		//s8 imm_s8;
-		//u8 imm_u8;
 		float imm_f32;
 		double imm_f64;
+		u64 procid;
 	};
 };
 typedef struct JIR JIR;
@@ -183,15 +183,12 @@ typedef struct JIR JIR;
 struct JIRIMAGE {
 	Arr(JIR) *proctab;
 	u8 *global;
-	// port_s are special registers for passing data between procedures, and in and out of the interpreter
+	// ports are special registers for passing data between procedures, and in and out of the interpreter
+	JIRTYPE *port_types;
 	u64 *port_u64;
-	//s64 *port_s64;
-	//s32 *port_s32;
-	//u32 *port_u32;
-	//s16 *port_s16;
-	//u16 *port_u16;
-	//s8 *port_s8;
-	//u8 *port_u8;
+	u64 *port_ptr_local;
+	u64 *port_ptr_global;
+	u8* *port_ptr_heap;
 	float *port_f32;
 	double *port_f64;
 };
@@ -251,18 +248,32 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 			break;
 		case TOKEN_HALT: // NOTE redundant?
 		case TOKEN_RET:
-		case TOKEN_SYSCALL:
 		case TOKEN_BFRAME: case TOKEN_EFRAME:
 			inst.opcode = TOKEN_TO_OP(token);
 			arrput(*instarr, inst);
 			break;
-		case TOKEN_BASELOCAL:
-		case TOKEN_BASEGLOBAL:
-			inst.opcode = TOKEN_TO_OP(token);
+		case TOKEN_SYSCALL:
+			inst.opcode = JIROP_SYSCALL;
+			inst.immediate = true;
 			lex(l);
-			assert(l->token == TOKEN_IDENTIFIER);
-			assert(*l->start == '%');
-			inst.a = atoi(l->start + 1);
+			assert(l->token >= TOKEN_BINLIT && l->token <= TOKEN_INTLIT);
+			switch(l->token) {
+			case TOKEN_BINLIT:
+				assert(0);
+				break;
+			case TOKEN_HEXLIT:
+				sscanf(l->start, "%lx", &inst.procid);
+				break;
+			case TOKEN_OCTLIT:
+				sscanf(l->start, "%lo", &inst.procid);
+				break;
+			case TOKEN_INTLIT:
+				sscanf(l->start, "%lu", &inst.procid);
+				break;
+			default:
+				assert(0);
+				break;
+			}
 			arrput(*instarr, inst);
 			break;
 		case TOKEN_CALL:
@@ -277,13 +288,13 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 					assert(0);
 					break;
 				case TOKEN_HEXLIT:
-					sscanf(l->start, "%lx", &inst.imm_u64);
+					sscanf(l->start, "%lx", &inst.procid);
 					break;
 				case TOKEN_OCTLIT:
-					sscanf(l->start, "%lo", &inst.imm_u64);
+					sscanf(l->start, "%lo", &inst.procid);
 					break;
 				case TOKEN_INTLIT:
-					sscanf(l->start, "%lu", &inst.imm_u64);
+					sscanf(l->start, "%lu", &inst.procid);
 					break;
 				default:
 					assert(0);
@@ -547,7 +558,9 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 			arrput(*instarr, inst);
 			break;        
 		case TOKEN_SETPORT:
-			inst.opcode = JIROP_SETPORT;
+		case TOKEN_SETARG:
+		case TOKEN_SETRET:
+			inst.opcode = TOKEN_TO_OP(token);
 			lex(l);
 			if(l->token == TOKEN_IMM) {
 				inst.immediate = true;
@@ -591,7 +604,9 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 			arrput(*instarr, inst);
 			break;
 		case TOKEN_GETPORT:
-			inst.opcode = JIROP_GETPORT;
+		case TOKEN_GETARG:
+		case TOKEN_GETRET:
+			inst.opcode = TOKEN_TO_OP(token);
 			lex(l);
 			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
 				inst.type = TOKEN_TO_TYPE(l->token);
@@ -613,7 +628,7 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 }
 
 void JIR_print(JIR inst) {
-	printf("opcode: %s\ntype: %s\ntype2: %s\na: %i\nb: %i\nc: %i\nimmediate: %i\nimm_u64: %lu\nimm_f32: %f\nimm_f64: %lf\n",
+	printf("opcode: %s\ntype: %s\ntype2: %s\na: %i\nb: %i\nc: %i\nimmediate: %i\nimm_u64: %lu\nimm_f32: %f\nimm_f64: %lf\nprocid: %lu\n",
 	opcodesDebug[inst.opcode],
 	typesDebug[inst.type],
 	typesDebug[inst.type2],
@@ -621,7 +636,8 @@ void JIR_print(JIR inst) {
 	inst.immediate,
 	inst.imm_u64,
 	inst.imm_f32,
-	inst.imm_f64);
+	inst.imm_f64,
+	inst.procid);
 }
 
 void JIR_exec(JIRIMAGE image) {
@@ -631,7 +647,11 @@ void JIR_exec(JIRIMAGE image) {
 	double reg_f64[32] = {0};
 
 	//s64 *port_s64 = image.port_s64;
+	JIRTYPE *port_types = image.port_types;
 	u64 *port_u64 = image.port_u64;
+	u64 *port_ptr_local = image.port_ptr_local;
+	u64 *port_ptr_global = image.port_ptr_global;
+	u8* *port_ptr_heap = image.port_ptr_heap;
 	float *port_f32 = image.port_f32;
 	double *port_f64 = image.port_f64;
 
@@ -644,6 +664,9 @@ void JIR_exec(JIRIMAGE image) {
 		0xffffffff, // U32
 		0xffff, // U16
 		0xff, // U8
+		0xffffffffffffffff, // PTR_LOCAL
+		0xffffffffffffffff, // PTR_GLOBAL
+		0xffffffffffffffff, // PTR_HEAP
 		0x0, // F32
 		0x0, // F64
 	};
@@ -651,8 +674,11 @@ void JIR_exec(JIRIMAGE image) {
 	u64 iarithBits[] = {
 		64, 32, 16, 8, 
 		64, 32, 16, 8, 
-		0x0, // F32
-		0x0, // F64
+		64, // PTR_LOCAL
+		64, // PTR_GLOBAL
+		64, // PTR_HEAP
+		0, // F32
+		0, // F64
 	};
 
 	u8 *global = image.global;
@@ -661,7 +687,7 @@ void JIR_exec(JIRIMAGE image) {
 	long local_pos = 0;
 	long localbase_pos = 0;
 
-	u8 *segptr = NULL;
+	u8 *ptr = NULL;
 	u8 *segTable[] = { local, global, NULL };
 
 	u64 procidStack[64] = {0};
@@ -677,9 +703,6 @@ void JIR_exec(JIRIMAGE image) {
 	u64 pc = 0;
 	
 	JIR *proc = image.proctab[procid];
-
-	// TODO
-	// add labels
 
 	while(pc < arrlen(proc)) {
 		JIR inst = proc[pc];
@@ -802,34 +825,34 @@ void JIR_exec(JIRIMAGE image) {
 			reg[inst.a] = reg[inst.b] & imask;
 			break;
 		case JIROP_LOAD:
-			segptr = segTable[inst.seg];
+			ptr = segTable[inst.seg] + reg[inst.b];
 			if(inst.seg == JIRSEG_HEAP) {
 				assert("heap segment unimplemented" && 0);
 			}
 
 			if(inst.type == JIRTYPE_F32) {
-				reg_f32[inst.a] = *(float*)(segptr + reg[inst.b]);
+				reg_f32[inst.a] = *(float*)(ptr);
 			} else if(inst.type == JIRTYPE_F64) {
-				reg_f64[inst.a] = *(double*)(segptr + reg[inst.b]);
+				reg_f64[inst.a] = *(double*)(ptr);
 			} else {
-				reg[inst.a] = *(u64*)(segptr + reg[inst.b]) & imask;
+				reg[inst.a] = *(u64*)(ptr) & imask;
 				if(issignedint)
 					reg[inst.a] = SIGN_EXTEND(reg[inst.a], iarithBits[inst.type]);
 			}
 			break;
 		case JIROP_STOR:
-			segptr = segTable[inst.seg];
+			ptr = segTable[inst.seg] + reg[inst.a];
 			if(inst.seg == JIRSEG_HEAP) {
 				assert("heap segment unimplemented" && 0);
 			}
 
 			if(inst.type == JIRTYPE_F32) {
-				*(float*)(segptr + reg[inst.a]) = reg_f32[inst.b];
+				*(float*)(ptr) = reg_f32[inst.b];
 			} else if(inst.type == JIRTYPE_F64) {
-				*(double*)(segptr + reg[inst.a]) = reg_f64[inst.b];
+				*(double*)(ptr) = reg_f64[inst.b];
 			} else {
-				*(u64*)(segptr + reg[inst.a]) &= ~imask;
-				*(u64*)(segptr + reg[inst.a]) |= reg[inst.b] & imask;
+				*(u64*)(ptr) &= ~imask;
+				*(u64*)(ptr) |= reg[inst.b] & imask;
 			}
 			break;
 		case JIROP_BFRAME:
@@ -916,6 +939,8 @@ void JIR_exec(JIRIMAGE image) {
 			break;
 
 		case JIROP_SETPORT:
+		case JIROP_SETARG:
+		case JIROP_SETRET:
 			iright = reg[inst.b] & imask;
 			f32right = reg_f32[inst.b];
 			f64right = reg_f64[inst.b];
@@ -934,8 +959,12 @@ void JIR_exec(JIRIMAGE image) {
 				port_f64[inst.a] = f64right;
 			else
 				port_u64[inst.a] = iright;
+
+			port_types[inst.a] = inst.type;
 			break;
 		case JIROP_GETPORT:
+		case JIROP_GETARG:
+		case JIROP_GETRET:
 			iright = port_u64[inst.b] & imask;
 			if(issignedint)
 				iright = SIGN_EXTEND(iright, iarithBits[inst.type]);
@@ -946,6 +975,8 @@ void JIR_exec(JIRIMAGE image) {
 				reg_f64[inst.a] = port_f64[inst.b];
 			else
 				reg[inst.a] = iright;
+
+			port_types[inst.a] = inst.type;
 			break;
 
 		case JIROP_CALL:
@@ -975,37 +1006,58 @@ void JIR_exec(JIRIMAGE image) {
 			 * 2	sys_open	const char *filename int flags          int mode
 			 * 3	sys_close	unsigned int fd
 			 */
-			switch(port_u64[0]) {
+			switch(inst.procid) {
 			case 0: // sys_read(unsigned int fd, char *buf, size_t count)
+				assert(port_types[1] >= JIRTYPE_PTR_LOCAL && port_types[1] <= JIRTYPE_PTR_HEAP);
+				ptr = segTable[port_types[1] - JIRTYPE_PTR_LOCAL];
+				if(port_types[1] == JIRTYPE_PTR_HEAP) {
+					ptr = port_ptr_heap[1];
+				} else if(port_types[1] == JIRTYPE_PTR_GLOBAL) {
+					ptr += port_ptr_global[1];
+				} else { // local pointer
+					ptr += port_ptr_local[1];
+				}
 				syscall_success = syscall(0,
-					(unsigned int)port_u64[1],
-					(char *)port_u64[2],
-					(size_t)port_u64[3]);
+					(unsigned int)port_u64[0],
+					(char *)ptr,
+					(size_t)port_u64[2]);
 				break;
 			case 1: // sys_write(unsigned int fd, const char *buf, size_t count)
+				assert(port_types[1] >= JIRTYPE_PTR_LOCAL && port_types[1] <= JIRTYPE_PTR_HEAP);
+				ptr = segTable[port_types[1] - JIRTYPE_PTR_LOCAL];
+				if(port_types[1] == JIRTYPE_PTR_HEAP) {
+					ptr = port_ptr_heap[1];
+				} else if(port_types[1] == JIRTYPE_PTR_GLOBAL) {
+					ptr += port_ptr_global[1];
+				} else { // local pointer
+					ptr += port_ptr_local[1];
+				}
 				syscall_success = syscall(1,
-					(unsigned int)port_u64[1],
-					(char *)port_u64[2],
-					(size_t)port_u64[3]);
+					(unsigned int)port_u64[0],
+					(char *)ptr,
+					(size_t)port_u64[2]);
 				break;
 			case 2: // sys_open(const char *filenamem, int flags, int mode)
+				assert(port_types[0] >= JIRTYPE_PTR_LOCAL && port_types[0] <= JIRTYPE_PTR_HEAP);
+				ptr = segTable[port_types[0] - JIRTYPE_PTR_LOCAL];
+				if(port_types[0] == JIRTYPE_PTR_HEAP) {
+					ptr = port_ptr_heap[0];
+				} else if(port_types[0] == JIRTYPE_PTR_GLOBAL) {
+					ptr += port_ptr_global[0];
+				} else { // local pointer
+					ptr += port_ptr_local[0];
+				}
 				syscall_success = syscall(2,
-					(char *)port_u64[1],
-					(int)port_u64[2],
-					(int)port_u64[3]);
+					(char *)ptr,
+					(int)port_u64[1],
+					(int)port_u64[2]);
 				break;
 			case 3: // sys_close(unsigned int fd)
 				syscall_success = syscall(3,
-					(unsigned int)port_u64[1]);
+					(unsigned int)port_u64[0]);
 				break;
 			}
 			assert("syscall failed" && (syscall_success != -1));
-			break;
-
-		case JIROP_BASELOCAL:
-		case JIROP_BASEGLOBAL:
-			reg[inst.a] = (u64)(segTable[inst.opcode-JIROP_BASELOCAL]
-					+ (!(inst.opcode-JIROP_BASELOCAL) && localbase_pos));
 			break;
 
 		case JIROP_HALT:
@@ -1025,27 +1077,21 @@ void JIR_exec(JIRIMAGE image) {
 void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u8 *global) {
 	i->proctab = proctab;
 	i->global = global;
+	i->port_types = malloc(64 * sizeof(JIRTYPE));
 	i->port_u64 = malloc(64 * sizeof(u64));
-	//i->port_s64 = malloc(64 * sizeof(s64));
-	//i->port_s32 = malloc(64 * sizeof(s32));
-	//i->port_u32 = malloc(64 * sizeof(u32));
-	//i->port_s16 = malloc(64 * sizeof(s16));
-	//i->port_u16 = malloc(64 * sizeof(u16));
-	//i->port_s8 = malloc(64 * sizeof(s8));
-	//i->port_u8 = malloc(64 * sizeof(u8));
+	i->port_ptr_local = malloc(64 * sizeof(u64));
+	i->port_ptr_global = malloc(64 * sizeof(u64));
+	i->port_ptr_heap = malloc(64 * sizeof(u8*));
 	i->port_f32 = malloc(64 * sizeof(f32));
 	i->port_f64 = malloc(64 * sizeof(f64));
 }
 
 void JIRIMAGE_destroy(JIRIMAGE *i) {
+	free(i->port_types);
 	free(i->port_u64);
-	//free(i->port_s64);
-	//free(i->port_s32);
-	//free(i->port_u32);
-	//free(i->port_s16);
-	//free(i->port_u16);
-	//free(i->port_s8);
-	//free(i->port_u8);
+	free(i->port_ptr_local);
+	free(i->port_ptr_global);
+	free(i->port_ptr_heap);
 	free(i->port_f32);
 	free(i->port_f64);
 	*i = (JIRIMAGE){0};
@@ -1075,13 +1121,12 @@ int main(int argc, char **argv) {
 		};
 
 		parse(&lexer, &instarr);
-		//printf("%zu\n", arrlen(instarr));
-		//for(int i = 0; i < arrlen(instarr); ++i) {
-		//	printf("INST %i\n", i);
-		//	JIR_print(instarr[i]);
-		//	printf("\n");
-		//}
-		//fmapclose(&fm);
+		for(int i = 0; i < arrlen(instarr); ++i) {
+			printf("INST %i\n", i);
+			JIR_print(instarr[i]);
+			printf("\n");
+		}
+		fmapclose(&fm);
 
 		JIR *proctab[8] = { instarr };
 		u8 *global = calloc(0x2000, sizeof(u8));
@@ -1116,7 +1161,6 @@ int main(int argc, char **argv) {
 		};
 
 		parse(&lexer, &instarr);
-		printf("%zu\n", arrlen(instarr));
 		for(int i = 0; i < arrlen(instarr); ++i) {
 			printf("INST %i\n", i);
 			JIR_print(instarr[i]);
@@ -1155,7 +1199,6 @@ int main(int argc, char **argv) {
 		};
 
 		parse(&lexer, &instarr);
-		printf("%zu\n", arrlen(instarr));
 		for(int i = 0; i < arrlen(instarr); ++i) {
 			printf("INST %i\n", i);
 			JIR_print(instarr[i]);
@@ -1216,7 +1259,6 @@ int main(int argc, char **argv) {
 		};
 
 		parse(&lexer, &instarr);
-		printf("%zu\n", arrlen(instarr));
 		for(int i = 0; i < arrlen(instarr); ++i) {
 			printf("INST %i\n", i);
 			JIR_print(instarr[i]);
