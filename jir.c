@@ -169,6 +169,8 @@ struct JIR {
 	JIRTYPE type;
 	JIRTYPE type2;
 	JIRSEG seg;
+	// NOTE the b index is only used in binary ops
+	// meaning: 'not', 'neg' and 'fneg' only use 'a' and 'c'
 	int a, b, c;
 	bool immediate;
 	union {
@@ -389,21 +391,55 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 			arrput(*instarr, inst);
 			break;
 		case TOKEN_NOT: case TOKEN_NEG: case TOKEN_FNEG:
-
-
-			// TODO
-			break;
-
-
-			lex(l);
 			inst.opcode = TOKEN_TO_OP(token);
+			lex(l);
+			if(l->token == TOKEN_IMM) {
+				inst.immediate = true;
+				lex(l);
+			}
 			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
 				inst.type = TOKEN_TO_TYPE(l->token);
 				lex(l);
 			}
+
 			assert(l->token == TOKEN_IDENTIFIER);
 			assert(*l->start == '%');
-			inst.a = atoi(l->start + 1);
+			index = atoi(l->start + 1);
+			inst.a = index;
+
+			if(inst.immediate) {
+				lex(l);
+				switch(l->token) {
+				case TOKEN_BINLIT:
+					assert(0);
+					break;
+				case TOKEN_HEXLIT:
+					sscanf(l->start, "%lx", &inst.imm_u64);
+					break;
+				case TOKEN_OCTLIT:
+					sscanf(l->start, "%lo", &inst.imm_u64);
+					break;
+				case TOKEN_INTLIT:
+					sscanf(l->start, "%li", (s64*)&inst.imm_u64);
+					break;
+				case TOKEN_FLOATLIT:
+					if(inst.type == JIRTYPE_F64)
+						sscanf(l->start, "%lf", &inst.imm_f64);
+					else
+						sscanf(l->start, "%f", &inst.imm_f32);
+					break;
+				default:
+					assert(0);
+					break;
+				}
+			} else {
+				lex(l);
+				assert(l->token == TOKEN_IDENTIFIER);
+				assert(*l->start == '%');
+				index = atoi(l->start + 1);
+				inst.c = index;
+			}
+
 			arrput(*instarr, inst);
 			break;
 		case TOKEN_BRANCH:
@@ -732,35 +768,62 @@ void JIR_exec(JIRIMAGE image) {
 			else
 				printf("reg %i: %li\n", inst.a, reg[inst.a]);
 			break;
+
+		case JIROP_NOT:
+			reg[inst.a] = ~iright;
+			reg[inst.a] &= imask;
+			break;
+		case JIROP_NEG:
+			reg[inst.a] = -iright;
+			reg[inst.a] &= imask;
+			break;
+		case JIROP_FNEG:
+			assert(inst.type == JIRTYPE_F64 || inst.type == JIRTYPE_F32);
+			if(inst.type == JIRTYPE_F64)
+				reg_f64[inst.a] = -f64right;
+			else
+				reg_f32[inst.a] = -f32right;
+			break;
+
 		case JIROP_ADD:
 			reg[inst.a] = ileft + iright;
+			reg[inst.a] &= imask;
 			break;
 		case JIROP_SUB:
 			reg[inst.a] = ileft - iright;
+			reg[inst.a] &= imask;
 			break;
 		case JIROP_MUL:
 			reg[inst.a] = ileft * iright;
+			reg[inst.a] &= imask;
 			break;
 		case JIROP_DIV:
 			reg[inst.a] = ileft / iright;
+			reg[inst.a] &= imask;
 			break;
 		case JIROP_MOD:
 			reg[inst.a] = ileft % iright;
+			reg[inst.a] &= imask;
 			break;
 		case JIROP_AND:
 			reg[inst.a] = ileft & iright;
+			reg[inst.a] &= imask;
 			break;
 		case JIROP_OR:
 			reg[inst.a] = ileft | iright;
+			reg[inst.a] &= imask;
 			break;
 		case JIROP_XOR:
 			reg[inst.a] = ileft ^ iright;
+			reg[inst.a] &= imask;
 			break;
 		case JIROP_LSHIFT:
 			reg[inst.a] = ileft << iright;
+			reg[inst.a] &= imask;
 			break;
 		case JIROP_RSHIFT:
 			reg[inst.a] = ileft >> iright;
+			reg[inst.a] &= imask;
 			break;
 
 		case JIROP_EQ:
@@ -1105,6 +1168,45 @@ int main(int argc, char **argv) {
 	printf("\n###### testing syscall ######\n\n");
 	{
 		Fmap fm;
+		fmapopen("test/unaryops", O_RDONLY, &fm);
+		for(char *s = fm.buf; *s; ++s)
+			*s = toupper(*s);
+		JIR *instarr = NULL;
+		arrsetcap(instarr, 2);
+		Lexer lexer = (Lexer) {
+			.keywords = keywords,
+			.keywordsCount = STATICARRLEN(keywords),
+			.keywordLengths = keywordLengths,
+			.src = fm.buf,
+			.cur = fm.buf,
+			.srcEnd = fm.buf + fm.size,
+			.debugInfo = (DebugInfo){ .line = 1, .col = 1 },
+		};
+
+		parse(&lexer, &instarr);
+		for(int i = 0; i < arrlen(instarr); ++i) {
+			printf("INST %i\n", i);
+			JIR_print(instarr[i]);
+			printf("\n");
+		}
+		fmapclose(&fm);
+
+		JIR *proctab[8] = { instarr };
+		u8 *global = calloc(0x2000, sizeof(u8));
+		JIRIMAGE image;
+		JIRIMAGE_init(&image, proctab, global);
+
+		JIR_exec(image);
+		free(global);
+		JIRIMAGE_destroy(&image);
+		arrfree(instarr);
+		instarr = NULL;
+		return 0;
+	}
+
+	printf("\n###### testing syscall ######\n\n");
+	{
+		Fmap fm;
 		fmapopen("test/syscall", O_RDONLY, &fm);
 		for(char *s = fm.buf; *s; ++s)
 			*s = toupper(*s);
@@ -1139,7 +1241,6 @@ int main(int argc, char **argv) {
 		JIRIMAGE_destroy(&image);
 		arrfree(instarr);
 		instarr = NULL;
-		return 0;
 	}
 
 	printf("\n###### testing float ops ######\n\n");
