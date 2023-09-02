@@ -86,13 +86,14 @@
 
 /* TODO
  *
- * BITCAST TYPECAST (pointers)
- * MEMSET
  * HEAPALLOC
  * HEAPFREE
+ * MEMSET
  * DUMPREGRANGE
  * DUMPMEM
  * DUMPMEMRANGE
+ *
+ * interpreter backtrace
  */
 
 #define TYPES         \
@@ -185,6 +186,7 @@ struct JIR {
 	bool immediate;
 	union {
 		u64 imm_u64;
+		s64 imm_s64;
 		float imm_f32;
 		double imm_f64;
 		u64 procid;
@@ -561,6 +563,7 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 			arrput(*instarr, inst);
 			break;
 		case TOKEN_HEAPALLOC:
+			inst.opcode = JIROP_HEAPALLOC;
 			break;
 		case TOKEN_HEAPFREE:
 			break;
@@ -568,6 +571,7 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 			break;
 		case TOKEN_VAL:
 			inst.opcode = JIROP_VAL;
+			inst.immediate = true;
 			lex(l);
 			if(l->token >= TOKEN_S64 && l->token <= TOKEN_F64) {
 				inst.type = TOKEN_TO_TYPE(l->token);
@@ -619,7 +623,7 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 			assert(l->token == TOKEN_IDENTIFIER);
 			assert(*l->start == '%');
 			index = atoi(l->start + 1);
-			inst.b = index;
+			inst.c = index;
 			arrput(*instarr, inst);
 			break;        
 		case TOKEN_SETPORT:
@@ -693,22 +697,25 @@ void parse(Lexer *l, Arr(JIR) *instarr) {
 }
 
 void JIR_print(JIR inst) {
-	printf("opcode: %s\ntype: %s\ntype2: %s\na: %i\nb: %i\nc: %i\nimmediate: %i\nimm_u64: %lu\nimm_f32: %f\nimm_f64: %lf\nprocid: %lu\n",
+	printf("opcode: %s\ntype: %s\ntype2: %s\na: %i\nb: %i\nc: %i\nimmediate: %i\nimm_u64: %lu\nimm_s64: %li\nimm_f32: %f\nimm_f64: %lf\nprocid: %lu\n",
 	opcodesDebug[inst.opcode],
 	typesDebug[inst.type],
 	typesDebug[inst.type2],
 	inst.a, inst.b, inst.c,
 	inst.immediate,
 	inst.imm_u64,
+	inst.imm_s64,
 	inst.imm_f32,
 	inst.imm_f64,
 	inst.procid);
 }
 
-// TODO interpreter backtrace trace
 void JIR_exec(JIRIMAGE image) {
 
 	u64 reg[32] = {0};
+	u64 reg_ptr_local[32] = {0};
+	u64 reg_ptr_global[32] = {0};
+	u8* reg_ptr_heap[32] = {0};
 	float reg_f32[32] = {0};
 	double reg_f64[32] = {0};
 
@@ -755,6 +762,7 @@ void JIR_exec(JIRIMAGE image) {
 
 	u8 *ptr = NULL;
 	u8 *segTable[] = { local, global, NULL };
+	u64 *ptrTable[] = { reg_ptr_local, reg_ptr_global, NULL };
 
 	u64 procidStack[64] = {0};
 	u64 pcStack[64] = {0};
@@ -784,6 +792,12 @@ void JIR_exec(JIRIMAGE image) {
 		bool type_c_f32 = (inst.type2 == JIRTYPE_F32);
 		bool type_a_f64 = (inst.type == JIRTYPE_F64);
 		bool type_c_f64 = (inst.type2 == JIRTYPE_F64);
+		bool type_a_ptr_local = (inst.type == JIRTYPE_PTR_LOCAL);
+		bool type_c_ptr_local = (inst.type2 == JIRTYPE_PTR_LOCAL);
+		bool type_a_ptr_global = (inst.type == JIRTYPE_PTR_GLOBAL);
+		bool type_c_ptr_global = (inst.type2 == JIRTYPE_PTR_GLOBAL);
+		bool type_a_ptr_heap = (inst.type == JIRTYPE_PTR_HEAP);
+		bool type_c_ptr_heap = (inst.type2 == JIRTYPE_PTR_HEAP);
 
 		issignedint = (inst.type >= JIRTYPE_S64 && inst.type <= JIRTYPE_S8);
 		if(issignedint) {
@@ -822,8 +836,20 @@ void JIR_exec(JIRIMAGE image) {
 				reg_f32[inst.a] = *(float*)(reg_f64 + inst.c);
 			} else if(type_a_f64 && type_c_f32) {
 				reg_f64[inst.a] = *(double*)(reg_f32 + inst.c);
+			// pointers
+			} else if(type_a_ptr_local && type_c_int) {
+				reg_ptr_local[inst.a] = reg[inst.c] & iarithMasks[inst.type2];
+			} else if(type_a_ptr_global && type_c_int) {
+				reg_ptr_global[inst.a] = reg[inst.c] & iarithMasks[inst.type2];
+			} else if(type_a_ptr_heap && type_c_int) {
+				reg_ptr_heap[inst.a] = (u8*)(reg[inst.c] & iarithMasks[inst.type2]);
+			} else if(type_a_int && type_c_ptr_local) {
+				reg[inst.a] = reg_ptr_local[inst.c] & iarithMasks[inst.type];
+			} else if(type_a_int && type_c_ptr_global) {
+				reg[inst.a] = reg_ptr_global[inst.c] & iarithMasks[inst.type];
+			} else if(type_a_int && type_c_ptr_heap) {
+				reg[inst.a] = (u64)(reg_ptr_heap[inst.c]) & iarithMasks[inst.type];
 			} else {
-				// TODO pointers
 				assert("illegal bitcast" && 0);
 			}
 			break;
@@ -843,8 +869,20 @@ void JIR_exec(JIRIMAGE image) {
 				reg_f32[inst.a] = (float)reg_f64[inst.c];
 			} else if(type_a_f64 && type_c_f32) {
 				reg_f64[inst.a] = (double)reg_f32[inst.c];
+			// pointers
+			} else if(type_a_ptr_local && type_c_int) {
+				reg_ptr_local[inst.a] = reg[inst.c] & iarithMasks[inst.type2];
+			} else if(type_a_ptr_global && type_c_int) {
+				reg_ptr_global[inst.a] = reg[inst.c] & iarithMasks[inst.type2];
+			} else if(type_a_ptr_heap && type_c_int) {
+				reg_ptr_heap[inst.a] = (u8*)(reg[inst.c] & iarithMasks[inst.type2]);
+			} else if(type_a_int && type_c_ptr_local) {
+				reg[inst.a] = reg_ptr_local[inst.c] & iarithMasks[inst.type];
+			} else if(type_a_int && type_c_ptr_global) {
+				reg[inst.a] = reg_ptr_global[inst.c] & iarithMasks[inst.type];
+			} else if(type_a_int && type_c_ptr_heap) {
+				reg[inst.a] = (u64)(reg_ptr_heap[inst.c]) & iarithMasks[inst.type];
 			} else {
-				// TODO pointers
 				assert("illegal bitcast" && 0);
 			}
 			break;
@@ -958,19 +996,37 @@ void JIR_exec(JIRIMAGE image) {
 				reg_f32[inst.a] = inst.imm_f32;
 			} else if(inst.type == JIRTYPE_F64) {
 				reg_f64[inst.a] = inst.imm_f64;
+			} else if(inst.type == JIRTYPE_PTR_LOCAL) {
+				reg_ptr_local[inst.a] = inst.imm_u64;
+			} else if(inst.type == JIRTYPE_PTR_GLOBAL) {
+				reg_ptr_global[inst.a] = inst.imm_u64;
+			} else if(inst.type == JIRTYPE_PTR_HEAP) {
+				reg_ptr_heap[inst.a] = (u8*)inst.imm_u64;
 			} else {
-				reg[inst.a] = inst.imm_u64 & imask;
-				if(issignedint)
-					reg[inst.a] = SIGN_EXTEND(reg[inst.a], iarithBits[inst.type]);
+				reg[inst.a] = iright;
 			}
 			break;
 		case JIROP_MOVE:
-			reg[inst.a] = reg[inst.b] & imask;
+			if(inst.type == JIRTYPE_F32) {
+				reg_f32[inst.a] = reg_f32[inst.c];
+			} else if(inst.type == JIRTYPE_F64) {
+				reg_f64[inst.a] = reg_f64[inst.c];
+			} else if(inst.type == JIRTYPE_PTR_LOCAL) {
+				reg_ptr_local[inst.a] = reg_ptr_local[inst.c];
+			} else if(inst.type == JIRTYPE_PTR_GLOBAL) {
+				reg_ptr_global[inst.a] = reg_ptr_global[inst.c];
+			} else if(inst.type == JIRTYPE_PTR_HEAP) {
+				reg_ptr_heap[inst.a] = reg_ptr_heap[inst.c];
+			} else {
+				reg[inst.a] = iright;
+			}
 			break;
 		case JIROP_LOAD:
-			ptr = segTable[inst.seg] + reg[inst.b];
 			if(inst.seg == JIRSEG_HEAP) {
 				assert("heap segment unimplemented" && 0);
+				ptr = reg_ptr_heap[inst.b];
+			} else {
+				ptr = segTable[inst.seg] + ptrTable[inst.seg][inst.b];
 			}
 
 			if(inst.type == JIRTYPE_F32) {
@@ -984,9 +1040,11 @@ void JIR_exec(JIRIMAGE image) {
 			}
 			break;
 		case JIROP_STOR:
-			ptr = segTable[inst.seg] + reg[inst.a];
 			if(inst.seg == JIRSEG_HEAP) {
 				assert("heap segment unimplemented" && 0);
+				ptr = reg_ptr_heap[inst.b];
+			} else {
+				ptr = segTable[inst.seg] + ptrTable[inst.seg][inst.b];
 			}
 
 			if(inst.type == JIRTYPE_F32) {
@@ -1006,10 +1064,10 @@ void JIR_exec(JIRIMAGE image) {
 			break;
 		case JIROP_ALLOC:
 			if(inst.immediate) {
-				reg[inst.a] = local_pos;
+				reg_ptr_local[inst.a] = local_pos;
 				local_pos += inst.imm_u64;
 			} else {
-				reg[inst.a] = local_pos;
+				reg_ptr_local[inst.a] = local_pos;
 				local_pos += TYPE_SIZES[inst.type];
 			}
 			break;
@@ -1264,11 +1322,6 @@ int main(int argc, char **argv) {
 		};
 
 		parse(&lexer, &instarr);
-		for(int i = 0; i < arrlen(instarr); ++i) {
-			printf("INST %i\n", i);
-			JIR_print(instarr[i]);
-			printf("\n");
-		}
 		fmapclose(&fm);
 
 		JIR *proctab[8] = { instarr };
@@ -1302,11 +1355,6 @@ int main(int argc, char **argv) {
 		};
 
 		parse(&lexer, &instarr);
-		for(int i = 0; i < arrlen(instarr); ++i) {
-			printf("INST %i\n", i);
-			JIR_print(instarr[i]);
-			printf("\n");
-		}
 		fmapclose(&fm);
 
 		JIR *proctab[8] = { instarr };
@@ -1340,11 +1388,6 @@ int main(int argc, char **argv) {
 		};
 
 		parse(&lexer, &instarr);
-		for(int i = 0; i < arrlen(instarr); ++i) {
-			printf("INST %i\n", i);
-			JIR_print(instarr[i]);
-			printf("\n");
-		}
 		fmapclose(&fm);
 
 		JIR *proctab[8] = { instarr };
@@ -1379,11 +1422,6 @@ int main(int argc, char **argv) {
 		};
 
 		parse(&lexer, &instarr);
-		for(int i = 0; i < arrlen(instarr); ++i) {
-			printf("INST %i\n", i);
-			JIR_print(instarr[i]);
-			printf("\n");
-		}
 		fmapclose(&fm);
 
 		JIR *proctab[8] = { instarr };
@@ -1417,71 +1455,6 @@ int main(int argc, char **argv) {
 		};
 
 		parse(&lexer, &instarr);
-		for(int i = 0; i < arrlen(instarr); ++i) {
-			printf("INST %i\n", i);
-			JIR_print(instarr[i]);
-			printf("\n");
-		}
-		fmapclose(&fm);
-
-		JIR *proctab[8] = { instarr };
-		u8 *global = calloc(0x2000, sizeof(u8));
-		JIRIMAGE image;
-		JIRIMAGE_init(&image, proctab, global);
-
-		JIR_exec(image);
-		free(global);
-		JIRIMAGE_destroy(&image);
-		arrfree(instarr);
-		instarr = NULL;
-	}
-
-	printf("\n###### testing lexer ######\n\n");
-	{
-		Fmap fm;
-		fmapopen("test/lexer_test", O_RDONLY, &fm);
-		for(char *s = fm.buf; *s; ++s)
-			*s = toupper(*s);
-		Lexer lexer = (Lexer) {
-			.keywords = keywords,
-			.keywordsCount = STATICARRLEN(keywords),
-			.keywordLengths = keywordLengths,
-			.src = fm.buf,
-			.cur = fm.buf,
-			.srcEnd = fm.buf + fm.size,
-			.debugInfo = (DebugInfo){ .line = 1, .col = 1 },
-		};
-		while(!lexer.eof) {
-			lex(&lexer);
-			printf("%s\n", tokenDebug[lexer.token-TOKEN_INVALID]);
-		}
-		fmapclose(&fm);
-	}
-
-	printf("\n###### testing parser ######\n\n");
-	{
-		Fmap fm;
-		fmapopen("test/interpreter_test", O_RDONLY, &fm);
-		for(char *s = fm.buf; *s; ++s)
-			*s = toupper(*s);
-		JIR *instarr = NULL;
-		arrsetcap(instarr, 2);
-		Lexer lexer = (Lexer) {
-			.keywords = keywords,
-			.keywordsCount = STATICARRLEN(keywords),
-			.keywordLengths = keywordLengths,
-			.src = fm.buf,
-			.cur = fm.buf,
-			.srcEnd = fm.buf + fm.size,
-			.debugInfo = (DebugInfo){ .line = 1, .col = 1 },
-		};
-
-		parse(&lexer, &instarr);
-		for(int i = 0; i < arrlen(instarr); ++i) {
-			printf("INST %i\n", i);
-			JIR_print(instarr[i]);
-			printf("\n");
-		}
 		fmapclose(&fm);
 
 		JIR *proctab[8] = { instarr };
