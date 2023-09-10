@@ -1,5 +1,0 @@
-val %0 1
-val ptr_global %1 0
-val u64 %2 14
-iowrite %0 ptr_global %1 %2
-halt

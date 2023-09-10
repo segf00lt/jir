@@ -1,7 +1,0 @@
-getport %1 %1
-mul imm %2 %1 10
-dumpreg %2
-add imm %2 %2 12
-add imm u8 %2 %2 126
-dumpreg %2
-ret

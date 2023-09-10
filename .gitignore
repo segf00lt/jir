@@ -6,3 +6,15 @@ test_llvm.c
 test_llvm.ll
 test_llvm.s
 a.out
+test/bitcast
+test/compare
+test/floats
+test/interpreter_test
+test/io
+test/lexer_test
+test/parser_test
+test/proc/proc0
+test/proc/proc1
+test/proc/proc2
+test/unaryops
+lex.c

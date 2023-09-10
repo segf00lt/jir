@@ -1227,7 +1227,7 @@ int main(int argc, char **argv) {
 	{
 		JIR instarr[] = {
 			MOVEOPIMM(F32, REG(2), IMMF32(112.4367)),
-			CASTOP(BITCAST,PTR_LOCAL,F32,REG(1),REG(2)),
+			CASTOP(BITCAST,U64,F32,REG(1),REG(2)),
 			DUMPREGOP(F32, REG(2)),
 			DUMPREGOP(U64, REG(1)),
 			MOVEOPIMM(U64,REG(0),IMMU64(0xffffffffff000000)),

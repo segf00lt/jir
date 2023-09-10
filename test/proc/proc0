@@ -1,5 +1,0 @@
-val %1 22
-setport %1 %1
-call imm 1
-halt
-
