@@ -628,19 +628,19 @@ void JIR_print(JIR inst) {
 	inst.debugmsg);
 }
 
-void JIR_exec(JIRIMAGE image) {
+void JIR_exec(JIRIMAGE *image) {
 
 	u64 reg[32] = {0};
 	u64 reg_ptr[32] = {0};
 	float reg_f32[32] = {0};
 	double reg_f64[32] = {0};
 
-	//s64 *port_s64 = image.port_s64;
-	JIRTYPE *port_types = image.port_types;
-	u64 *port_u64 = image.port_u64;
-	u64 *port_ptr = image.port_ptr;
-	float *port_f32 = image.port_f32;
-	double *port_f64 = image.port_f64;
+	//s64 *port_s64 = image->port_s64;
+	JIRTYPE *port_types = image->port_types;
+	u64 *port_u64 = image->port_u64;
+	u64 *port_ptr = image->port_ptr;
+	float *port_f32 = image->port_f32;
+	double *port_f64 = image->port_f64;
 
 	u64 iarithMasks[] = {
 		0xffffffffffffffff, // S64
@@ -668,18 +668,18 @@ void JIR_exec(JIRIMAGE image) {
 		0, // F64
 	};
 
-	u8 *global = image.global;
-	u8 *local = image.local;
-	u8 *heap = image.heap;
+	u8 *global = image->global;
+	u8 *local = image->local;
+	u8 *heap = image->heap;
 	size_t segsize[] = {
-		image.localsize,
-		image.globalsize,
-		image.heapsize,
+		image->localsize,
+		image->globalsize,
+		image->heapsize,
 	};
-	size_t localbasesize = image.localbasesize;
-	u64 *localbase = image.localbase;
-	u64 local_pos = image.local_pos;
-	u64 localbase_pos = image.localbase_pos;
+	size_t localbasesize = image->localbasesize;
+	u64 *localbase = image->localbase;
+	u64 local_pos = image->local_pos;
+	u64 localbase_pos = image->localbase_pos;
 
 	u8 *ptr = NULL;
 	u8 *segTable[] = { local, global, heap };
@@ -694,7 +694,7 @@ void JIR_exec(JIRIMAGE image) {
 	u64 pc = 0;
 	u64 newpc = 0;
 	
-	JIR *proc = image.proctab[procid];
+	JIR *proc = image->proctab[procid];
 
 	while(run) {
 		pc = newpc;
@@ -728,7 +728,6 @@ void JIR_exec(JIRIMAGE image) {
 			assert(0);
 			break;
 		case JIROP_DUMPMEM: // NOTE range is inclusive
-			// TODO not dumping heap memory properly
 			assert("INVALID ADDRESS"&&
 			segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] > ptr_left);
 			assert("INVALID ADDRESS"&&
@@ -982,8 +981,8 @@ void JIR_exec(JIRIMAGE image) {
 			break;
 
 		case JIROP_GROWHEAP:
-			heap = realloc(heap, segsize[2]*iright*sizeof(u8));
-			memset(heap+segsize[2],0,segsize[2]*(iright-1));
+			segTable[2] = realloc(segTable[2], segsize[2]*iright*sizeof(u8));
+			memset(segTable[2]+segsize[2],0,segsize[2]*(iright-1));
 			segsize[2] *= iright;
 			break;
 
@@ -1095,7 +1094,7 @@ void JIR_exec(JIRIMAGE image) {
 				procid = inst.operand[0].imm_u64;
 			else
 				procid = reg[inst.operand[0].r];
-			proc = image.proctab[procid];
+			proc = image->proctab[procid];
 			//printf("calling proc %lu\n",procid);
 			newpc = 0;
 			break;
@@ -1104,7 +1103,7 @@ void JIR_exec(JIRIMAGE image) {
 			--calldepth;
 			procid = procidStack[calldepth];
 			newpc = pcStack[calldepth];
-			proc = image.proctab[procid];
+			proc = image->proctab[procid];
 			break;
 
 		case JIROP_IOREAD:
@@ -1137,9 +1136,10 @@ void JIR_exec(JIRIMAGE image) {
 		}
 	}
 
-	image.local_pos = local_pos;
-	image.localbase_pos = localbase_pos;
-	image.heapsize = segsize[2];
+	image->local_pos = local_pos;
+	image->localbase_pos = localbase_pos;
+	image->heap = segTable[2];
+	image->heapsize = segsize[2];
 }
 
 void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab) {
@@ -1197,7 +1197,7 @@ int main(int argc, char **argv) {
 		JIR *proctab[8] = { instarr };
 		JIRIMAGE image;
 		JIRIMAGE_init(&image, proctab);
-		JIR_exec(image);
+		JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -1221,7 +1221,7 @@ int main(int argc, char **argv) {
 		JIR *proctab[8] = { instarr };
 		JIRIMAGE image;
 		JIRIMAGE_init(&image, proctab);
-		JIR_exec(image);
+		JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
 	
@@ -1239,7 +1239,7 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		JIRIMAGE_init(&image, proctab);
 		strcpy((char*)image.global, "Hello, World!\n");
-		JIR_exec(image);
+		JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -1260,7 +1260,7 @@ int main(int argc, char **argv) {
 		JIR *proctab[8] = { instarr };
 		JIRIMAGE image;
 		JIRIMAGE_init(&image, proctab);
-		JIR_exec(image);
+		JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -1276,7 +1276,7 @@ int main(int argc, char **argv) {
 		JIR *proctab[8] = { instarr };
 		JIRIMAGE image;
 		JIRIMAGE_init(&image, proctab);
-		JIR_exec(image);
+		JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -1324,7 +1324,7 @@ int main(int argc, char **argv) {
 		JIR *proctab[8] = {proc0,proc1,proc2};
 		JIRIMAGE image;
 		JIRIMAGE_init(&image, proctab);
-		JIR_exec(image);
+		JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -1336,13 +1336,15 @@ int main(int argc, char **argv) {
 			STOROP(PTR_HEAP, U16, REG(2), REG(1)),
 			LOADOP(U16, PTR_HEAP, REG(3), REG(2)),
 			DUMPREGOP(U16, REG(3)),
-			DUMPMEMOP(PTR_GLOBAL, false, true, REG(2), IMMU64(0xfed+17)),
+			DUMPMEMOP(PTR_HEAP, false, true, REG(2), IMMU64(0xfed+18)),
+			GROWHEAPOP(IMMU64(2)),
+			DUMPMEMOP(PTR_HEAP, false, true, REG(2), IMMU64(0xfed+100)),
 			HALTOP,
 		};
 		JIR *proctab[8] = {instarr};
 		JIRIMAGE image;
 		JIRIMAGE_init(&image, proctab);
-		JIR_exec(image);
+		JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
 
