@@ -1,3 +1,4 @@
+CC = clang
 CFLAGS = -g -Wall -Wpedantic -Werror
 LDFLAGS = -lraylib -lm
 
