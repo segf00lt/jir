@@ -4,8 +4,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "stb_ds.h"
-#include "stb_sprintf.h"
 
 #define IS_POW_2(x) ((x & (x-1)) == 0)
 #define MAX(a,b) (((a) > (b)) ? (a) : (b))

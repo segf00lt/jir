@@ -75,6 +75,7 @@
 
 /* TODO
  *
+ * JIR_verify()
  * better testing
  */
 
@@ -178,7 +179,7 @@ struct JIR {
 typedef struct JIR JIR;
 
 struct JIRIMAGE {
-	Arr(JIR) *proctab;
+	JIR **proctab;
 	u8 *local;
 	u8 *global;
 	u8 *heap;
