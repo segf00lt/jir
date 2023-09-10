@@ -10,11 +10,9 @@
 #include <ctype.h>
 #include <assert.h>
 #include <error.h>
-#include <raylib.h>
 #include <math.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include "fmap.h"
 #include "basic.h"
 #include "stb_sprintf.h"
 #include "stb_ds.h"
@@ -81,12 +79,11 @@
 	X(BITCAST)      \
 	X(TYPECAST)     \
 	X(DUMPREG)      \
-	X(DUMPMEM)
+	X(DUMPPORT)     \
+	X(DUMPMEM)      \
+	X(DEBUGMSG)
 
 /* TODO
- *
- * DUMPMEM
- * GROWHEAP
  *
  * better testing
  * interpreter backtrace
@@ -187,12 +184,22 @@ struct JIR {
 	JIRTYPE type[3];
 	JIROPERAND operand[3];
 	bool immediate[3];
+	const char *debugmsg;
 };
 typedef struct JIR JIR;
 
 struct JIRIMAGE {
 	Arr(JIR) *proctab;
+	u8 *local;
 	u8 *global;
+	u8 *heap;
+	size_t localsize;
+	size_t globalsize;
+	size_t heapsize; // only the heap is allowed to grow
+	u64 *localbase;
+	size_t localbasesize;
+	u64 local_pos;
+	u64 localbase_pos;
 	// ports are special registers for passing data between procedures, and in and out of the interpreter
 	JIRTYPE *port_types;
 	u64 *port_u64;
@@ -209,6 +216,25 @@ typedef struct JIRIMAGE JIRIMAGE;
 #define IMMS64(data) (JIROPERAND){ .imm_s64 = data }
 #define IMMF32(data) (JIROPERAND){ .imm_f32 = data }
 #define IMMF64(data) (JIROPERAND){ .imm_f64 = data }
+#define PTR(data) (JIROPERAND){ .offset = data }
+
+#define DUMPMEMOP(t, imm_start, imm_end, start, end)\
+	(JIR){\
+		.opcode = JIROP_DUMPMEM,\
+		.type = {JIRTYPE_##t, JIRTYPE_##t, JIRTYPE_##t},\
+		.operand = { {0}, start, end },\
+		.immediate = {0, imm_start, imm_end },\
+		.debugmsg = NULL,\
+	}\
+
+#define DEBUGMSGOP(msg)\
+	(JIR){\
+		.opcode = JIROP_DEBUGMSG,\
+		.type = {0},\
+		.operand = {0},\
+		.immediate = {0},\
+		.debugmsg = msg,\
+	}\
 
 #define BINOP(op, t, dest, left, right)\
 	(JIR){\
@@ -218,6 +244,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = left,\
 		.operand[2] = right,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define UNOP(op, t, dest, src)\
@@ -228,6 +255,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = src,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define BINOPIMM(op, t, dest, left, right)\
@@ -238,6 +266,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = left,\
 		.operand[2] = right,\
 		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
 	}
 
 #define UNOPIMM(op, t, dest, src)\
@@ -248,6 +277,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = src,\
 		.immediate = { false, true, false, },\
+		.debugmsg = NULL,\
 	}
 
 #define CASTOP(op, t_to, t_from, reg_to, reg_from)\
@@ -267,6 +297,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = offset,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define BRANCHOPIMM(cond, offset)\
@@ -277,6 +308,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = offset,\
 		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
 	}
 
 #define JMPOP(offset)\
@@ -287,6 +319,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = offset,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define JMPOPIMM(offset)\
@@ -297,6 +330,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = offset,\
 		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
 	}
 
 #define LOADOP(t_dest, t_src, dest, src)\
@@ -307,6 +341,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = src,\
 		.operand[2] = {0},\
 		.immediate = { false, false, false },\
+		.debugmsg = NULL,\
 	}
 
 #define STOROP(t_dest, t_src, dest, src)\
@@ -317,6 +352,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = src,\
 		.operand[2] = {0},\
 		.immediate = { false, false, false },\
+		.debugmsg = NULL,\
 	}
 
 #define MOVEOP(t, dest, src)\
@@ -328,10 +364,10 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[2] = {0},\
 	}
 
-#define BFRAMEOP (JIR){ .opcode = JIROP_BFRAME, .type = {0}, .operand = {0}, .immediate = {0}, }
-#define EFRAMEOP (JIR){ .opcode = JIROP_EFRAME, .type = {0}, .operand = {0}, .immediate = {0}, }
-#define HALTOP (JIR){ .opcode = JIROP_HALT, .type = {0}, .operand = {0}, .immediate = {0}, }
-#define RETOP (JIR){ .opcode = JIROP_RET, .type = {0}, .operand = {0}, .immediate = {0}, }
+#define BFRAMEOP (JIR){ .opcode = JIROP_BFRAME, .type = {0}, .operand = {0}, .immediate = {0}, .debugmsg = NULL, }
+#define EFRAMEOP (JIR){ .opcode = JIROP_EFRAME, .type = {0}, .operand = {0}, .immediate = {0}, .debugmsg = NULL, }
+#define HALTOP (JIR){ .opcode = JIROP_HALT, .type = {0}, .operand = {0}, .immediate = {0}, .debugmsg = NULL, }
+#define RETOP (JIR){ .opcode = JIROP_RET, .type = {0}, .operand = {0}, .immediate = {0}, .debugmsg = NULL, }
 
 #define MOVEOPIMM(t, dest, src)\
 	(JIR){\
@@ -341,6 +377,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = src,\
 		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
 	}
 
 #define ALLOCOP(t, dest)\
@@ -351,6 +388,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = {0},\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define ALLOCOPIMM(size, dest)\
@@ -361,6 +399,29 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = size,\
 		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
+	}
+
+#define GROWHEAPOP(factor)\
+	(JIR){\
+		.opcode = JIROP_GROWHEAP,\
+		.type = { 0, 0, JIRTYPE_U64 },\
+		.operand[0] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = factor,\
+		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
+	}
+
+#define GROWHEAPOPINDIRECT(factor)\
+	(JIR){\
+		.opcode = JIROP_GROWHEAP,\
+		.type = { 0, 0, JIRTYPE_U64 },\
+		.operand[0] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = factor,\
+		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define CALLOP(procid)\
@@ -371,6 +432,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = {0},\
 		.immediate = { true, false, false },\
+		.debugmsg = NULL,\
 	}
 
 #define CALLOPINDIRECT(procid)\
@@ -381,66 +443,73 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = {0},\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define SETARGOP(t, dest, src)\
 	(JIR){\
 		.opcode = JIROP_SETARG,\
-		.type = { JIRTYPE_##t, JIRTYPE_##t, 0 },\
+		.type = { JIRTYPE_##t,0,JIRTYPE_##t },\
 		.operand[0] = dest,\
-		.operand[1] = src,\
-		.operand[2] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = src,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define SETARGOPIMM(t, dest, src)\
 	(JIR){\
 		.opcode = JIROP_SETARG,\
-		.type = { JIRTYPE_##t, JIRTYPE_##t, 0 },\
+		.type = { JIRTYPE_##t,0,JIRTYPE_##t },\
 		.operand[0] = dest,\
-		.operand[1] = src,\
-		.operand[2] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = src,\
 		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
 	}
 
 #define SETRETOP(t, dest, src)\
 	(JIR){\
 		.opcode = JIROP_SETRET,\
-		.type = { JIRTYPE_##t, JIRTYPE_##t, 0 },\
+		.type = { JIRTYPE_##t,0,JIRTYPE_##t },\
 		.operand[0] = dest,\
-		.operand[1] = src,\
-		.operand[2] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = src,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define SETRETOPIMM(what, t, dest, src)\
 	(JIR){\
 		.opcode = JIROP_SETRET,\
-		.type = { JIRTYPE_##t, JIRTYPE_##t, 0 },\
+		.type = { JIRTYPE_##t,0,JIRTYPE_##t },\
 		.operand[0] = dest,\
-		.operand[1] = src,\
-		.operand[2] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = src,\
 		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
 	}
 
 #define GETARGOP(t, dest, src)\
 	(JIR){\
 		.opcode = JIROP_GETARG,\
-		.type = { JIRTYPE_##t, JIRTYPE_##t,0 },\
+		.type = { JIRTYPE_##t,0,JIRTYPE_##t },\
 		.operand[0] = dest,\
-		.operand[1] = src,\
-		.operand[2] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = src,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define GETRETOP(t, dest, src)\
 	(JIR){\
 		.opcode = JIROP_GETRET,\
-		.type = { JIRTYPE_##t, JIRTYPE_##t,0 },\
+		.type = { JIRTYPE_##t,0,JIRTYPE_##t },\
 		.operand[0] = dest,\
-		.operand[1] = src,\
-		.operand[2] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = src,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define IOREADOP(t_ptr, fd, ptr, count)\
@@ -451,6 +520,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = ptr,\
 		.operand[2] = count,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define IOWRITEOP(t_ptr, fd, ptr, count)\
@@ -461,6 +531,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = ptr,\
 		.operand[2] = count,\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define IOOPENOP(t_ptr, ptr, flags)\
@@ -471,6 +542,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = flags,\
 		.operand[2] = {0},\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define IOCLOSEOP(fd)\
@@ -481,6 +553,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = {0},\
 		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 #define DUMPREGOP(t, r)\
@@ -491,19 +564,68 @@ typedef struct JIRIMAGE JIRIMAGE;
 		.operand[1] = {0},\
 		.operand[2] = {0},\
 		.immediate = {0},\
+		.debugmsg = NULL,\
+	}
+
+#define DUMPPORTOP(t, r)\
+	(JIR){\
+		.opcode = JIROP_DUMPPORT,\
+		.type = { JIRTYPE_##t,0,0 },\
+		.operand[0] = r,\
+		.operand[1] = {0},\
+		.operand[2] = {0},\
+		.immediate = {0},\
+		.debugmsg = NULL,\
 	}
 
 void JIR_print(JIR inst) {
-	printf("opcode: %s\ntype: %s\ntype2: %s\na: %i\nb: %i\nc: %i\nimmediate: %i\nimm_u64: 0x%lx\nimm_f32: %f\nimm_f64: %lf\nprocid: %lu\n",
+	printf("JIR {\n\
+	opcode: %s\n\
+	type[0]: %s\n\
+	operand[0].r: %i\n\
+	operand[0].imm_u64: %lu\n\
+	operand[0].imm_f32: %f\n\
+	operand[0].imm_f64: %lf\n\
+	operand[0].procid: %lu\n\
+	immediate[0]: %i\n\
+	type[1]: %s\n\
+	operand[1].r: %i\n\
+	operand[1].imm_u64: %lu\n\
+	operand[1].imm_f32: %f\n\
+	operand[1].imm_f64: %lf\n\
+	operand[1].procid: %lu\n\
+	immediate[1]: %i\n\
+	type[2]: %s\n\
+	operand[2].r: %i\n\
+	operand[2].imm_u64: %lu\n\
+	operand[2].imm_f32: %f\n\
+	operand[2].imm_f64: %lf\n\
+	operand[2].procid: %lu\n\
+	immediate[2]: %i\n\
+	debugmsg: %s\n}\n",
 	opcodesDebug[inst.opcode],
 	typesDebug[inst.type[0]],
-	typesDebug[inst.type[1]],
-	inst.operand[0].r, inst.operand[1].r, inst.operand[2].r,
-	inst.immediate[0],
+	inst.operand[0].r,
 	inst.operand[0].imm_u64,
 	inst.operand[0].imm_f32,
 	inst.operand[0].imm_f64,
-	inst.operand[0].procid);
+	inst.operand[0].procid,
+	inst.immediate[0],
+	typesDebug[inst.type[1]],
+	inst.operand[1].r,
+	inst.operand[1].imm_u64,
+	inst.operand[1].imm_f32,
+	inst.operand[1].imm_f64,
+	inst.operand[1].procid,
+	inst.immediate[1],
+	typesDebug[inst.type[2]],
+	inst.operand[2].r,
+	inst.operand[2].imm_u64,
+	inst.operand[2].imm_f32,
+	inst.operand[2].imm_f64,
+	inst.operand[2].procid,
+	inst.immediate[2],
+	inst.debugmsg);
 }
 
 void JIR_exec(JIRIMAGE image) {
@@ -547,11 +669,17 @@ void JIR_exec(JIRIMAGE image) {
 	};
 
 	u8 *global = image.global;
-	u8 *local = calloc(0x1000, sizeof(u8));
-	u8 *heap = calloc(0x2000, sizeof(u8));
-	long *localbase = calloc(0x80, sizeof(long));
-	long local_pos = 0;
-	long localbase_pos = 0;
+	u8 *local = image.local;
+	u8 *heap = image.heap;
+	size_t segsize[] = {
+		image.localsize,
+		image.globalsize,
+		image.heapsize,
+	};
+	size_t localbasesize = image.localbasesize;
+	u64 *localbase = image.localbase;
+	u64 local_pos = image.local_pos;
+	u64 localbase_pos = image.localbase_pos;
 
 	u8 *ptr = NULL;
 	u8 *segTable[] = { local, global, heap };
@@ -564,14 +692,17 @@ void JIR_exec(JIRIMAGE image) {
 	bool issignedint = false;
 	u64 procid = 0;
 	u64 pc = 0;
+	u64 newpc = 0;
 	
 	JIR *proc = image.proctab[procid];
 
-	while(true) {
+	while(run) {
+		pc = newpc;
 		JIR inst = proc[pc];
-		u64 newpc = pc + 1;
+		newpc = pc + 1;
 		u64 imask = iarithMasks[inst.type[0]];
-		u64 ileft = reg[inst.operand[1].r] & imask;
+		u64 ileft = (inst.immediate[1] ? inst.operand[1].imm_u64 : reg[inst.operand[1].r]) & imask;
+		u64 ptr_left = inst.immediate[1] ? inst.operand[1].offset : reg_ptr[inst.operand[1].r];
 		u64 ptr_right = inst.immediate[2] ? inst.operand[2].offset : reg_ptr[inst.operand[2].r];
 		u64 iright = (inst.immediate[2] ? inst.operand[2].imm_u64 : reg[inst.operand[2].r]) & imask;
 		f32 f32right = inst.immediate[2] ? inst.operand[2].imm_f32 : reg_f32[inst.operand[2].r];
@@ -596,15 +727,51 @@ void JIR_exec(JIRIMAGE image) {
 			printf("opcode %s unimplemeted\n", opcodesDebug[inst.opcode]);
 			assert(0);
 			break;
+		case JIROP_DUMPMEM: // NOTE range is inclusive
+			// TODO not dumping heap memory properly
+			assert("INVALID ADDRESS"&&
+			segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] > ptr_left);
+			assert("INVALID ADDRESS"&&
+			segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] > ptr_right);
+			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[0])];
+			printf("========================\n %s SEG: 0x%lx, 0x%lx\n\n",
+					segmentsDebug[PTRTYPE_TO_SEGMENT(inst.type[0])],
+					ptr_left, ptr_right);
+			for(u64 p = 0, l = ptr_right-ptr_left; p <= l; ++p) {
+				printf(" %02X",ptr[p+ptr_left]);
+				if(p < 7)
+					continue;
+				if(!((p+1) & 0x7))
+					printf("\n");
+			}
+			if((ptr_right-ptr_left) & 0x7)
+				printf("\n");
+			printf("========================\n");
+			break;
+		case JIROP_DEBUGMSG:
+			printf("DEBUGMSG: %s\n", inst.debugmsg);
+			break;
+		case JIROP_DUMPPORT:
+			if(inst.type[0] == JIRTYPE_F32)
+				printf("F32 PORT %i: %f\n", inst.operand[0].r, port_f32[inst.operand[0].r]);
+			else if(inst.type[0] == JIRTYPE_F64)
+				printf("F64 PORT %i: %g\n", inst.operand[0].r, port_f64[inst.operand[0].r]);
+			else if(inst.type[0] >= JIRTYPE_PTR_LOCAL && inst.type[0] <= JIRTYPE_PTR_HEAP)
+				printf("PTR PORT %i: 0x%lx\n", inst.operand[0].r, port_ptr[inst.operand[0].r]);
+			else
+				printf("PORT %i: 0x%lx\n", inst.operand[0].r, imask & port_u64[inst.operand[0].r]);
+			break;
+
 		case JIROP_DUMPREG:
 			if(inst.type[0] == JIRTYPE_F32)
-				printf("f32 reg %i: %f\n", inst.operand[0].r, reg_f32[inst.operand[0].r]);
+				printf("F32 REG %i: %f\n", inst.operand[0].r, reg_f32[inst.operand[0].r]);
 			else if(inst.type[0] == JIRTYPE_F64)
-				printf("f64 reg %i: %g\n", inst.operand[0].r, reg_f64[inst.operand[0].r]);
+				printf("F64 REG %i: %lf\n", inst.operand[0].r, reg_f64[inst.operand[0].r]);
 			else if(inst.type[0] >= JIRTYPE_PTR_LOCAL && inst.type[0] <= JIRTYPE_PTR_HEAP)
-				printf("reg %i: 0x%lx\n", inst.operand[0].r, reg_ptr[inst.operand[0].r]);
+				printf("PTR REG %i: 0x%lx\n", inst.operand[0].r, reg_ptr[inst.operand[0].r]);
 			else
-				printf("reg %i: 0x%lx\n", inst.operand[0].r, imask&reg[inst.operand[0].r]);
+				printf("REG %i: 0x%lx\n", inst.operand[0].r,
+						iarithMasks[inst.type[0]]&reg[inst.operand[0].r]);
 			break;
 
 		case JIROP_BITCAST:
@@ -750,7 +917,7 @@ void JIR_exec(JIRIMAGE image) {
 			break;
 		case JIROP_BRANCH:
 			if(reg[inst.operand[0].r] == 0)
-				iright = 0;
+				iright = 1;
 			newpc = pc + iright;
 			break;
 
@@ -767,30 +934,37 @@ void JIR_exec(JIRIMAGE image) {
 			}
 			break;
 		case JIROP_LOAD:
+			assert("INVALID ADDRESS"&&
+			segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] > reg_ptr[inst.operand[1].r]);
 			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
 			if(inst.type[0] == JIRTYPE_F32) {
 				reg_f32[inst.operand[0].r] = *(float*)(ptr);
 			} else if(inst.type[0] == JIRTYPE_F64) {
 				reg_f64[inst.operand[0].r] = *(double*)(ptr);
 			} else {
+				imask = iarithMasks[inst.type[0]];
 				reg[inst.operand[0].r] = *(u64*)(ptr) & imask;
 				if(issignedint)
 					reg[inst.operand[0].r] = SIGN_EXTEND(reg[inst.operand[0].r], iarithBits[inst.type[0]]);
 			}
 			break;
 		case JIROP_STOR:
+			assert("INVALID ADDRESS"&&
+			segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] > reg_ptr[inst.operand[0].r]);
 			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[0])] + reg_ptr[inst.operand[0].r];
 			if(inst.type[1] == JIRTYPE_F32) {
 				*(float*)(ptr) = reg_f32[inst.operand[1].r];
 			} else if(inst.type[1] == JIRTYPE_F64) {
 				*(double*)(ptr) = reg_f64[inst.operand[1].r];
 			} else {
+				imask = iarithMasks[inst.type[1]];
 				*(u64*)(ptr) &= ~imask;
 				*(u64*)(ptr) |= reg[inst.operand[1].r] & imask;
 			}
 			break;
 		case JIROP_BFRAME:
 			localbase[localbase_pos++] = local_pos;
+			assert("LOCAL BASE OVERFLOW" && localbase_pos < localbasesize);
 			break;
 		case JIROP_EFRAME:
 			local_pos = localbase[--localbase_pos];
@@ -804,6 +978,13 @@ void JIR_exec(JIRIMAGE image) {
 				reg_ptr[inst.operand[0].r] = local_pos;
 				local_pos += TYPE_SIZES[inst.type[0]];
 			}
+			assert("LOCAL OVERFLOW" && local_pos < segsize[0]);
+			break;
+
+		case JIROP_GROWHEAP:
+			heap = realloc(heap, segsize[2]*iright*sizeof(u8));
+			memset(heap+segsize[2],0,segsize[2]*(iright-1));
+			segsize[2] *= iright;
 			break;
 
 		case JIROP_FADD:
@@ -897,9 +1078,9 @@ void JIR_exec(JIRIMAGE image) {
 			if(inst.type[0] >= JIRTYPE_PTR_LOCAL && inst.type[0] <= JIRTYPE_PTR_HEAP) {
 				reg_ptr[inst.operand[0].r] = port_ptr[inst.operand[2].r];
 			} else if(inst.type[0] == JIRTYPE_F32) {
-				reg_f32[inst.operand[0].r] = port_f32[inst.operand[1].r];
+				reg_f32[inst.operand[0].r] = port_f32[inst.operand[2].r];
 			} else if(inst.type[0] == JIRTYPE_F64) {
-				reg_f64[inst.operand[0].r] = port_f64[inst.operand[1].r];
+				reg_f64[inst.operand[0].r] = port_f64[inst.operand[2].r];
 			} else {
 				reg[inst.operand[0].r] = iright;
 			}
@@ -915,9 +1096,11 @@ void JIR_exec(JIRIMAGE image) {
 			else
 				procid = reg[inst.operand[0].r];
 			proc = image.proctab[procid];
+			//printf("calling proc %lu\n",procid);
 			newpc = 0;
 			break;
 		case JIROP_RET:
+			//printf("returning from proc %lu\n",procid);
 			--calldepth;
 			procid = procidStack[calldepth];
 			newpc = pcStack[calldepth];
@@ -925,17 +1108,23 @@ void JIR_exec(JIRIMAGE image) {
 			break;
 
 		case JIROP_IOREAD:
+			assert("INVALID ADDRESS"&&
+			segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] > reg_ptr[inst.operand[1].r]);
 			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
 			assert("IOREAD FAILURE" &&
 					read((unsigned int)reg[inst.operand[0].r],(char*)ptr,(size_t)reg[inst.operand[2].r])!=-1);
 			break;
 		case JIROP_IOWRITE:
+			assert("INVALID ADDRESS"&&
+			segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] > reg_ptr[inst.operand[1].r]);
 			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
 			assert("IOWRITE FAILURE" &&
 					write((unsigned int)reg[inst.operand[0].r],(void*)ptr,(size_t)reg[inst.operand[2].r])!=-1);
 			break;
 		case JIROP_IOOPEN:
-			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[0])];
+			assert("INVALID ADDRESS"&&
+			segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] > reg_ptr[inst.operand[0].r]);
+			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[0])] + reg_ptr[inst.operand[0].r];
 			assert("IOOPEN FAILURE" && open((char*)ptr,(int)reg[inst.operand[1].r])!=-1);
 			break;
 		case JIROP_IOCLOSE:
@@ -946,21 +1135,25 @@ void JIR_exec(JIRIMAGE image) {
 			run = false;
 			break;
 		}
-
-		if(!run) break;
-
-		pc = newpc;
 	}
 
-	// TODO move all segments to JIRIMAGE
-	free(local);
-	free(localbase);
-	free(heap);
+	image.local_pos = local_pos;
+	image.localbase_pos = localbase_pos;
+	image.heapsize = segsize[2];
 }
 
-void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u8 *global) {
+void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab) {
 	i->proctab = proctab;
-	i->global = global;
+	i->local = calloc(0x1000, sizeof(u8));
+	i->global = calloc(0x1000, sizeof(u8));
+	i->heap = calloc(0x1000, sizeof(u8));
+	i->localsize = 0x1000;
+	i->globalsize = 0x1000;
+	i->heapsize = 0x1000;
+	i->localbasesize = 0x80;
+	i->localbase = calloc(0x80, sizeof(u64));
+	i->localbase_pos = 0;
+	i->local_pos = 0;
 	i->port_types = malloc(64 * sizeof(JIRTYPE));
 	i->port_u64 = malloc(64 * sizeof(u64));
 	i->port_ptr = malloc(64 * sizeof(u64));
@@ -969,16 +1162,16 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u8 *global) {
 }
 
 void JIRIMAGE_destroy(JIRIMAGE *i) {
+	free(i->local);
+	free(i->global);
+	free(i->heap);
+	free(i->localbase);
 	free(i->port_types);
 	free(i->port_u64);
 	free(i->port_ptr);
 	free(i->port_f32);
 	free(i->port_f64);
 	*i = (JIRIMAGE){0};
-}
-
-int compareProcFiles(const void *a, const void *b) {
-	return strcmp(*(char**)a, *(char**)b);
 }
 
 int main(int argc, char **argv) {
@@ -1002,11 +1195,9 @@ int main(int argc, char **argv) {
 			HALTOP,
 		};
 		JIR *proctab[8] = { instarr };
-		u8 *global = calloc(0x2000, sizeof(u8));
 		JIRIMAGE image;
-		JIRIMAGE_init(&image, proctab, global);
+		JIRIMAGE_init(&image, proctab);
 		JIR_exec(image);
-		free(global);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -1028,11 +1219,9 @@ int main(int argc, char **argv) {
 			HALTOP,
 		};
 		JIR *proctab[8] = { instarr };
-		u8 *global = calloc(0x2000, sizeof(u8));
 		JIRIMAGE image;
-		JIRIMAGE_init(&image, proctab, global);
+		JIRIMAGE_init(&image, proctab);
 		JIR_exec(image);
-		free(global);
 		JIRIMAGE_destroy(&image);
 	}
 	
@@ -1043,15 +1232,14 @@ int main(int argc, char **argv) {
 			MOVEOPIMM(PTR_GLOBAL, REG(1), IMMU64(0)),
 			MOVEOPIMM(U64, REG(2), IMMU64(14)),
 			IOWRITEOP(PTR_GLOBAL, REG(0), REG(1), REG(2)),
+			DUMPMEMOP(PTR_GLOBAL, true, true, IMMU64(0), IMMU64(14)),
 			HALTOP,
 		};
 		JIR *proctab[8] = { instarr };
-		u8 *global = calloc(0x2000, sizeof(u8));
-		strcpy((char*)global, "Hello, World!\n");
 		JIRIMAGE image;
-		JIRIMAGE_init(&image, proctab, global);
+		JIRIMAGE_init(&image, proctab);
+		strcpy((char*)image.global, "Hello, World!\n");
 		JIR_exec(image);
-		free(global);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -1070,11 +1258,9 @@ int main(int argc, char **argv) {
 			HALTOP,
 		};
 		JIR *proctab[8] = { instarr };
-		u8 *global = calloc(0x2000, sizeof(u8));
 		JIRIMAGE image;
-		JIRIMAGE_init(&image, proctab, global);
+		JIRIMAGE_init(&image, proctab);
 		JIR_exec(image);
-		free(global);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -1088,11 +1274,9 @@ int main(int argc, char **argv) {
 			HALTOP,
 		};
 		JIR *proctab[8] = { instarr };
-		u8 *global = calloc(0x2000, sizeof(u8));
 		JIRIMAGE image;
-		JIRIMAGE_init(&image, proctab, global);
+		JIRIMAGE_init(&image, proctab);
 		JIR_exec(image);
-		free(global);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -1101,6 +1285,8 @@ int main(int argc, char **argv) {
 		JIR proc0[] = {
 			MOVEOPIMM(S64, REG(1), IMMU64(22)),
 			SETARGOP(S64,PORT(1),REG(1)),
+			DEBUGMSGOP("dumping port in proc0"),
+			DUMPPORTOP(S64,PORT(1)),
 			CALLOP(IMMU64(1)),
 			HALTOP,
 		};
@@ -1113,7 +1299,9 @@ int main(int argc, char **argv) {
 			STOROP(PTR_LOCAL,S64,REG(3),REG(2)),
 			BRANCHOPIMM(REG(2),IMMU64(3)),
 			MOVEOPIMM(U64, REG(1), IMMU64(12)),
-			SETARGOP(S64,PORT(1),REG(1)),
+			SETARGOP(U64,PORT(1),REG(1)),
+			DUMPREGOP(U64,REG(1)),
+			DUMPPORTOP(U64,PORT(1)),
 			CALLOP(IMMU64(2)),
 			LOADOP(S64,PTR_LOCAL,REG(2),REG(3)),
 			DUMPREGOP(U64,REG(2)),
@@ -1123,20 +1311,38 @@ int main(int argc, char **argv) {
 		};
 		JIR proc2[] = {
 			GETARGOP(U64,REG(1),PORT(1)),
+			DUMPPORTOP(U64,PORT(1)),
 			BINOPIMM(MUL,U64,REG(2),REG(1),IMMU64(10)),
 			DUMPREGOP(U64,REG(2)),
 			BINOPIMM(ADD,U64,REG(2),REG(2),IMMU64(12)),
+			DUMPREGOP(U64,REG(2)),
 			BINOPIMM(ADD,U8,REG(2),REG(2),IMMU64(126)),
 			DUMPREGOP(U64,REG(2)),
 			RETOP,
 			HALTOP,
 		};
 		JIR *proctab[8] = {proc0,proc1,proc2};
-		u8 *global = calloc(0x2000, sizeof(u8));
 		JIRIMAGE image;
-		JIRIMAGE_init(&image, proctab, global);
+		JIRIMAGE_init(&image, proctab);
 		JIR_exec(image);
-		free(global);
+		JIRIMAGE_destroy(&image);
+	}
+
+	printf("\n###### testing heap ######\n\n");
+	{
+		JIR instarr[] = {
+			MOVEOPIMM(U16, REG(1), IMMU64(12)),
+			MOVEOPIMM(PTR_HEAP, REG(2), PTR(0xfed)),
+			STOROP(PTR_HEAP, U16, REG(2), REG(1)),
+			LOADOP(U16, PTR_HEAP, REG(3), REG(2)),
+			DUMPREGOP(U16, REG(3)),
+			DUMPMEMOP(PTR_GLOBAL, false, true, REG(2), IMMU64(0xfed+17)),
+			HALTOP,
+		};
+		JIR *proctab[8] = {instarr};
+		JIRIMAGE image;
+		JIRIMAGE_init(&image, proctab);
+		JIR_exec(image);
 		JIRIMAGE_destroy(&image);
 	}
 

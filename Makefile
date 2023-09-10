@@ -1,6 +1,6 @@
 CC = clang
 CFLAGS = -g -Wall -Wpedantic -Werror
-LDFLAGS = -lraylib -lm
+LDFLAGS = -lm
 
 all:
 	$(CC) $(CFLAGS) jir.c -o jir $(LDFLAGS)
