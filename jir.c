@@ -1,6 +1,4 @@
 #define JLIB_FMAP_IMPL
-#define STB_SPRINTF_IMPLEMENTATION
-#define STB_DS_IMPLEMENTATION
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,13 +11,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include "basic.h"
-#include "stb_sprintf.h"
-#include "stb_ds.h"
-
-#undef sprintf
-#undef snprintf
-#define sprintf stbsp_sprintf
-#define snprintf stbsp_snprintf
 
 #define OPCODES         \
 	X(HALT)         \
