@@ -9,7 +9,6 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <assert.h>
-#include <error.h>
 #include <math.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -86,7 +85,6 @@
 /* TODO
  *
  * better testing
- * interpreter backtrace
  */
 
 #define TYPES         \
@@ -151,19 +149,19 @@ enum JIRSEG {
 };
 typedef enum JIRSEG JIRSEG;
 
-const char *opcodesDebug[] = {
+const char *opcodesdebug[] = {
 #define X(val) #val,
 	OPCODES
 #undef X
 };
 
-const char *typesDebug[] = {
+const char *typesdebug[] = {
 #define X(val) #val,
 	TYPES
 #undef X
 };
 
-const char *segmentsDebug[] = {
+const char *segmentsdebug[] = {
 #define X(val) #val,
 	SEGMENTS
 #undef X
@@ -202,7 +200,7 @@ struct JIRIMAGE {
 	u64 localbase_pos;
 	// ports are special registers for passing data between procedures, and in and out of the interpreter
 	JIRTYPE *port_types;
-	u64 *port_u64;
+	u64 *port;
 	u64 *port_ptr;
 	float *port_f32;
 	double *port_f64;
@@ -358,10 +356,10 @@ typedef struct JIRIMAGE JIRIMAGE;
 #define MOVEOP(t, dest, src)\
 	(JIR){\
 		.opcode = JIROP_MOVE,\
-		.type = { JIRTYPE_##t, JIRTYPE_##t, 0 },\
+		.type = { JIRTYPE_##t, 0, JIRTYPE_##t },\
 		.operand[0] = dest,\
-		.operand[1] = src,\
-		.operand[2] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = src,\
 	}
 
 #define BFRAMEOP (JIR){ .opcode = JIROP_BFRAME, .type = {0}, .operand = {0}, .immediate = {0}, .debugmsg = NULL, }
@@ -372,7 +370,7 @@ typedef struct JIRIMAGE JIRIMAGE;
 #define MOVEOPIMM(t, dest, src)\
 	(JIR){\
 		.opcode = JIROP_MOVE,\
-		.type = { JIRTYPE_##t, JIRTYPE_##t, 0 },\
+		.type = { JIRTYPE_##t, 0, JIRTYPE_##t },\
 		.operand[0] = dest,\
 		.operand[1] = {0},\
 		.operand[2] = src,\
@@ -579,46 +577,34 @@ typedef struct JIRIMAGE JIRIMAGE;
 	}
 
 void JIR_print(JIR inst) {
-	printf("JIR {\n\
-	opcode: %s\n\
-	type[0]: %s\n\
-	operand[0].r: %i\n\
-	operand[0].imm_u64: %lu\n\
-	operand[0].imm_f32: %f\n\
-	operand[0].imm_f64: %lf\n\
-	operand[0].procid: %lu\n\
-	immediate[0]: %i\n\
-	type[1]: %s\n\
-	operand[1].r: %i\n\
-	operand[1].imm_u64: %lu\n\
-	operand[1].imm_f32: %f\n\
-	operand[1].imm_f64: %lf\n\
-	operand[1].procid: %lu\n\
-	immediate[1]: %i\n\
-	type[2]: %s\n\
-	operand[2].r: %i\n\
-	operand[2].imm_u64: %lu\n\
-	operand[2].imm_f32: %f\n\
-	operand[2].imm_f64: %lf\n\
-	operand[2].procid: %lu\n\
-	immediate[2]: %i\n\
-	debugmsg: %s\n}\n",
-	opcodesDebug[inst.opcode],
-	typesDebug[inst.type[0]],
+	printf("(JIR) {\n\
+	.opcode = JIROP_%s,\n\
+	.type[0] = JIRTYPE_%s,\n\
+	.operand[0] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu },\n\
+	.immediate[0] = %i,\n\
+	.type[1] = JIRTYPE_%s,\n\
+	.operand[1] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu },\n\
+	.immediate[1] = %i,\n\
+	.type[2] = JIRTYPE_%s,\n\
+	.operand[2] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu },\n\
+	.immediate[2] = %i,\n\
+	.debugmsg = %s,\n}\n",
+	opcodesdebug[inst.opcode],
+	typesdebug[inst.type[0]],
 	inst.operand[0].r,
 	inst.operand[0].imm_u64,
 	inst.operand[0].imm_f32,
 	inst.operand[0].imm_f64,
 	inst.operand[0].procid,
 	inst.immediate[0],
-	typesDebug[inst.type[1]],
+	typesdebug[inst.type[1]],
 	inst.operand[1].r,
 	inst.operand[1].imm_u64,
 	inst.operand[1].imm_f32,
 	inst.operand[1].imm_f64,
 	inst.operand[1].procid,
 	inst.immediate[1],
-	typesDebug[inst.type[2]],
+	typesdebug[inst.type[2]],
 	inst.operand[2].r,
 	inst.operand[2].imm_u64,
 	inst.operand[2].imm_f32,
@@ -628,6 +614,22 @@ void JIR_print(JIR inst) {
 	inst.debugmsg);
 }
 
+bool JIR_errortrace(char *msg, JIR **proctab, u64 pc, u64 procid, u64 *pcstack, u64 *procidstack, u64 calldepth) {
+	printf("JIR TRACE: ERROR TRACING\n");
+	pcstack[calldepth] = pc + 1;
+	procidstack[calldepth] = procid;
+	JIR inst;
+	for(u64 i = 0; i <= calldepth; ++i) {
+		pc = pcstack[calldepth-i] - 1;
+		procid = procidstack[calldepth-i];
+		inst = proctab[procid][pc];
+		printf("INSTRUCTION %lu, PROC %lu:\n", pc, procid);
+		JIR_print(inst);
+	}
+	fputs(msg, stdout);
+	return false;
+}
+
 void JIR_exec(JIRIMAGE *image) {
 
 	u64 reg[32] = {0};
@@ -635,14 +637,13 @@ void JIR_exec(JIRIMAGE *image) {
 	float reg_f32[32] = {0};
 	double reg_f64[32] = {0};
 
-	//s64 *port_s64 = image->port_s64;
 	JIRTYPE *port_types = image->port_types;
-	u64 *port_u64 = image->port_u64;
+	u64 *port = image->port;
 	u64 *port_ptr = image->port_ptr;
 	float *port_f32 = image->port_f32;
 	double *port_f64 = image->port_f64;
 
-	u64 iarithMasks[] = {
+	u64 iarithmasks[] = {
 		0xffffffffffffffff, // S64
 		0xffffffff, // S32
 		0xffff, // S16
@@ -658,7 +659,7 @@ void JIR_exec(JIRIMAGE *image) {
 		0x0, // F64
 	};
 
-	u64 iarithBits[] = {
+	u64 iarithbits[] = {
 		64, 32, 16, 8, 
 		64, 32, 16, 8, 
 		64, // PTR_LOCAL
@@ -682,12 +683,14 @@ void JIR_exec(JIRIMAGE *image) {
 	u64 localbase_pos = image->localbase_pos;
 
 	u8 *ptr = NULL;
-	u8 *segTable[] = { local, global, heap };
+	u8 *segtable[] = { local, global, heap };
 
-	u64 procidStack[64] = {0};
-	u64 pcStack[64] = {0};
+	u64 procidstack[64] = {0};
+	u64 pcstack[64] = {0};
 	u64 calldepth = 0;
 
+	u64 iocallval = 0;
+	char *iocallerror = NULL;
 	bool run = true;
 	bool issignedint = false;
 	u64 procid = 0;
@@ -699,8 +702,21 @@ void JIR_exec(JIRIMAGE *image) {
 	while(run) {
 		pc = newpc;
 		JIR inst = proc[pc];
+#ifdef DEBUG
+		printf("JIR TRACE: EXECUTION LOG\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
+		JIR_print(inst);
+#endif
+		// NOTE we should write a JIR_verify() function to do checks (like these ones)
+		if(inst.opcode >= JIROP_FADD && inst.opcode <= JIROP_FGE && inst.type[0] < JIRTYPE_F32) {
+			run = JIR_errortrace("ERROR: INVALID TYPE TO FLOATING POINT INSTRUCTION\n",
+				image->proctab, pc, procid, pcstack, procidstack, calldepth);
+		}
+		if(inst.opcode >= JIROP_ADD && inst.opcode <= JIROP_GE && inst.type[0] >= JIRTYPE_F32) {
+			run = JIR_errortrace("ERROR: INVALID TYPE TO INTEGER INSTRUCTION\n",
+				image->proctab, pc, procid, pcstack, procidstack, calldepth);
+		}
 		newpc = pc + 1;
-		u64 imask = iarithMasks[inst.type[0]];
+		u64 imask = iarithmasks[inst.type[0]];
 		u64 ileft = (inst.immediate[1] ? inst.operand[1].imm_u64 : reg[inst.operand[1].r]) & imask;
 		u64 ptr_left = inst.immediate[1] ? inst.operand[1].offset : reg_ptr[inst.operand[1].r];
 		u64 ptr_right = inst.immediate[2] ? inst.operand[2].offset : reg_ptr[inst.operand[2].r];
@@ -718,24 +734,26 @@ void JIR_exec(JIRIMAGE *image) {
 
 		issignedint = (inst.type[0] >= JIRTYPE_S64 && inst.type[0] <= JIRTYPE_S8);
 		if(issignedint) {
-			ileft = SIGN_EXTEND(ileft, iarithBits[inst.type[0]]);
-			iright = SIGN_EXTEND(iright, iarithBits[inst.type[0]]);
+			ileft = SIGN_EXTEND(ileft, iarithbits[inst.type[0]]);
+			iright = SIGN_EXTEND(iright, iarithbits[inst.type[0]]);
 		}
 
 		switch(inst.opcode) {
 		default:
-			printf("opcode %s unimplemeted\n", opcodesDebug[inst.opcode]);
-			assert(0);
+			run = JIR_errortrace("ERROR: INVALID OPCODE\n",
+				image->proctab, pc, procid, pcstack, procidstack, calldepth);
 			break;
-		case JIROP_DUMPMEM: // NOTE range is inclusive
-			assert("INVALID ADDRESS"&&
-			segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] > ptr_left);
-			assert("INVALID ADDRESS"&&
-			segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] > ptr_right);
-			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[0])];
+		case JIROP_DUMPMEM:
+			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] <= ptr_left ||
+			   segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] <= ptr_right) {
+				run = JIR_errortrace("ERROR: INVALID POINTER\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
+			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[0])];
 			printf("========================\n %s SEG: 0x%lx, 0x%lx\n\n",
-					segmentsDebug[PTRTYPE_TO_SEGMENT(inst.type[0])],
+					segmentsdebug[PTRTYPE_TO_SEGMENT(inst.type[0])],
 					ptr_left, ptr_right);
+			// NOTE range is inclusive
 			for(u64 p = 0, l = ptr_right-ptr_left; p <= l; ++p) {
 				printf(" %02X",ptr[p+ptr_left]);
 				if(p < 7)
@@ -758,7 +776,7 @@ void JIR_exec(JIRIMAGE *image) {
 			else if(inst.type[0] >= JIRTYPE_PTR_LOCAL && inst.type[0] <= JIRTYPE_PTR_HEAP)
 				printf("PTR PORT %i: 0x%lx\n", inst.operand[0].r, port_ptr[inst.operand[0].r]);
 			else
-				printf("PORT %i: 0x%lx\n", inst.operand[0].r, imask & port_u64[inst.operand[0].r]);
+				printf("PORT %i: 0x%lx\n", inst.operand[0].r, imask & port[inst.operand[0].r]);
 			break;
 
 		case JIROP_DUMPREG:
@@ -770,56 +788,58 @@ void JIR_exec(JIRIMAGE *image) {
 				printf("PTR REG %i: 0x%lx\n", inst.operand[0].r, reg_ptr[inst.operand[0].r]);
 			else
 				printf("REG %i: 0x%lx\n", inst.operand[0].r,
-						iarithMasks[inst.type[0]]&reg[inst.operand[0].r]);
+						iarithmasks[inst.type[0]]&reg[inst.operand[0].r]);
 			break;
 
 		case JIROP_BITCAST:
 			if(type_0_int && type_1_int) {
-				reg[inst.operand[0].r] = reg[inst.operand[1].r] & iarithMasks[inst.type[1]];
+				reg[inst.operand[0].r] = reg[inst.operand[1].r] & iarithmasks[inst.type[1]];
 			} else if(type_0_f64 && type_1_int) {
-				iright = reg[inst.operand[1].r] & iarithMasks[inst.type[1]];
+				iright = reg[inst.operand[1].r] & iarithmasks[inst.type[1]];
 				reg_f64[inst.operand[0].r] = *(double*)&iright;
 			} else if(type_0_f32 && type_1_int) {
-				iright = reg[inst.operand[1].r] & iarithMasks[inst.type[1]];
+				iright = reg[inst.operand[1].r] & iarithmasks[inst.type[1]];
 				reg_f32[inst.operand[0].r] = *(float*)&iright;
 			} else if(type_0_int && type_1_f64) {
-				reg[inst.operand[0].r] = *(u64*)(reg_f64 + inst.operand[1].r) & iarithMasks[inst.type[0]];
+				reg[inst.operand[0].r] = *(u64*)(reg_f64 + inst.operand[1].r) & iarithmasks[inst.type[0]];
 			} else if(type_0_int && type_1_f32) {
-				reg[inst.operand[0].r] = *(u64*)(reg_f32 + inst.operand[1].r) & iarithMasks[inst.type[0]];
+				reg[inst.operand[0].r] = *(u64*)(reg_f32 + inst.operand[1].r) & iarithmasks[inst.type[0]];
 			} else if(type_0_f32 && type_1_f64) {
 				reg_f32[inst.operand[0].r] = *(float*)(reg_f64 + inst.operand[1].r);
 			} else if(type_0_f64 && type_1_f32) {
 				reg_f64[inst.operand[0].r] = *(double*)(reg_f32 + inst.operand[1].r);
 			} else if(type_0_ptr && type_1_int) {
-				reg_ptr[inst.operand[0].r] = reg[inst.operand[1].r] & iarithMasks[inst.type[1]];
+				reg_ptr[inst.operand[0].r] = reg[inst.operand[1].r] & iarithmasks[inst.type[1]];
 			} else if(type_0_int && type_1_ptr) {
-				reg[inst.operand[0].r] = reg_ptr[inst.operand[1].r] & iarithMasks[inst.type[0]];
+				reg[inst.operand[0].r] = reg_ptr[inst.operand[1].r] & iarithmasks[inst.type[0]];
 			} else {
-				assert("illegal bitcast" && 0);
+				run = JIR_errortrace("ERROR: ILLEGAL BITCAST\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
 			}
 			break;
 
 		case JIROP_TYPECAST:
 			if(type_0_int && type_1_int) {
-				reg[inst.operand[0].r] = reg[inst.operand[1].r] & iarithMasks[inst.type[1]];
+				reg[inst.operand[0].r] = reg[inst.operand[1].r] & iarithmasks[inst.type[1]];
 			} else if(type_0_f64 && type_1_int) {
-				reg_f64[inst.operand[0].r] = (double)(reg[inst.operand[1].r] & iarithMasks[inst.type[1]]);
+				reg_f64[inst.operand[0].r] = (double)(reg[inst.operand[1].r] & iarithmasks[inst.type[1]]);
 			} else if(type_0_f32 && type_1_int) {
-				reg_f32[inst.operand[0].r] = (float)(reg[inst.operand[1].r] & iarithMasks[inst.type[1]]);
+				reg_f32[inst.operand[0].r] = (float)(reg[inst.operand[1].r] & iarithmasks[inst.type[1]]);
 			} else if(type_0_int && type_1_f64) {
-				reg[inst.operand[0].r] = (s64)reg_f64[inst.operand[1].r] & iarithMasks[inst.type[0]];
+				reg[inst.operand[0].r] = (s64)reg_f64[inst.operand[1].r] & iarithmasks[inst.type[0]];
 			} else if(type_0_int && type_1_f32) {
-				reg[inst.operand[0].r] = (s64)reg_f32[inst.operand[1].r] & iarithMasks[inst.type[0]];
+				reg[inst.operand[0].r] = (s64)reg_f32[inst.operand[1].r] & iarithmasks[inst.type[0]];
 			} else if(type_0_f32 && type_1_f64) {
 				reg_f32[inst.operand[0].r] = (float)reg_f64[inst.operand[1].r];
 			} else if(type_0_f64 && type_1_f32) {
 				reg_f64[inst.operand[0].r] = (double)reg_f32[inst.operand[1].r];
 			} else if(type_0_ptr && type_1_int) {
-				reg_ptr[inst.operand[0].r] = reg[inst.operand[1].r] & iarithMasks[inst.type[1]];
+				reg_ptr[inst.operand[0].r] = reg[inst.operand[1].r] & iarithmasks[inst.type[1]];
 			} else if(type_0_int && type_1_ptr) {
-				reg[inst.operand[0].r] = reg_ptr[inst.operand[1].r] & iarithMasks[inst.type[0]];
+				reg[inst.operand[0].r] = reg_ptr[inst.operand[1].r] & iarithmasks[inst.type[0]];
 			} else {
-				assert("illegal bitcast" && 0);
+				run = JIR_errortrace("ERROR: ILLEGAL BITCAST\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
 			}
 			break;
 
@@ -832,7 +852,10 @@ void JIR_exec(JIRIMAGE *image) {
 			reg[inst.operand[0].r] &= imask;
 			break;
 		case JIROP_FNEG:
-			assert(inst.type[0] == JIRTYPE_F64 || inst.type[0] == JIRTYPE_F32);
+			if(inst.type[0] < JIRTYPE_F32) {
+				run = JIR_errortrace("ERROR: INVALID TYPE TO FLOATING POINT INSTRUCTION\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
 			if(inst.type[0] == JIRTYPE_F64)
 				reg_f64[inst.operand[0].r] = -f64right;
 			else
@@ -921,7 +944,10 @@ void JIR_exec(JIRIMAGE *image) {
 			break;
 
 		case JIROP_MOVE:
-			assert("operand types must be equal" && inst.type[0] == inst.type[1]);
+			if(inst.type[0] != inst.type[2]) {
+				run = JIR_errortrace("ERROR: INCOMPATIBLE OPERAND TYPES TO MOVE INSTRUCTION\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
 			if(inst.type[0] == JIRTYPE_F32) {
 				reg_f32[inst.operand[0].r] = f32right;
 			} else if(inst.type[0] == JIRTYPE_F64) {
@@ -933,43 +959,53 @@ void JIR_exec(JIRIMAGE *image) {
 			}
 			break;
 		case JIROP_LOAD:
-			assert("INVALID ADDRESS"&&
-			segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] > reg_ptr[inst.operand[1].r]);
-			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
+			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] <= reg_ptr[inst.operand[1].r]) {
+				run = JIR_errortrace("ERROR: INVALID POINTER\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
+			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
 			if(inst.type[0] == JIRTYPE_F32) {
 				reg_f32[inst.operand[0].r] = *(float*)(ptr);
 			} else if(inst.type[0] == JIRTYPE_F64) {
 				reg_f64[inst.operand[0].r] = *(double*)(ptr);
 			} else {
-				imask = iarithMasks[inst.type[0]];
+				imask = iarithmasks[inst.type[0]];
 				reg[inst.operand[0].r] = *(u64*)(ptr) & imask;
 				if(issignedint)
-					reg[inst.operand[0].r] = SIGN_EXTEND(reg[inst.operand[0].r], iarithBits[inst.type[0]]);
+					reg[inst.operand[0].r] = SIGN_EXTEND(reg[inst.operand[0].r], iarithbits[inst.type[0]]);
 			}
 			break;
 		case JIROP_STOR:
-			assert("INVALID ADDRESS"&&
-			segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] > reg_ptr[inst.operand[0].r]);
-			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[0])] + reg_ptr[inst.operand[0].r];
+			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] <= reg_ptr[inst.operand[0].r]) {
+				run = JIR_errortrace("ERROR: INVALID POINTER\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
+			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[0])] + reg_ptr[inst.operand[0].r];
 			if(inst.type[1] == JIRTYPE_F32) {
 				*(float*)(ptr) = reg_f32[inst.operand[1].r];
 			} else if(inst.type[1] == JIRTYPE_F64) {
 				*(double*)(ptr) = reg_f64[inst.operand[1].r];
 			} else {
-				imask = iarithMasks[inst.type[1]];
+				imask = iarithmasks[inst.type[1]];
 				*(u64*)(ptr) &= ~imask;
 				*(u64*)(ptr) |= reg[inst.operand[1].r] & imask;
 			}
 			break;
 		case JIROP_BFRAME:
 			localbase[localbase_pos++] = local_pos;
-			assert("LOCAL BASE OVERFLOW" && localbase_pos < localbasesize);
+			if(localbase_pos >= localbasesize) {
+				run = JIR_errortrace("ERROR: LOCAL BASE OVERFLOW\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
 			break;
 		case JIROP_EFRAME:
 			local_pos = localbase[--localbase_pos];
 			break;
 		case JIROP_ALLOC:
-			assert(inst.type[0] == JIRTYPE_PTR_LOCAL);
+			if(inst.type[0] != JIRTYPE_PTR_LOCAL) {
+				run = JIR_errortrace("ERROR: INVALID POINTER TYPE TO ALLOC\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
 			if(inst.immediate[2]) {
 				reg_ptr[inst.operand[0].r] = local_pos;
 				local_pos += inst.operand[2].imm_u64;
@@ -977,12 +1013,14 @@ void JIR_exec(JIRIMAGE *image) {
 				reg_ptr[inst.operand[0].r] = local_pos;
 				local_pos += TYPE_SIZES[inst.type[0]];
 			}
-			assert("LOCAL OVERFLOW" && local_pos < segsize[0]);
+			if(local_pos >= segsize[0]) {
+				run = JIR_errortrace("ERROR: LOCAL OVERFLOW\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
 			break;
-
 		case JIROP_GROWHEAP:
-			segTable[2] = realloc(segTable[2], segsize[2]*iright*sizeof(u8));
-			memset(segTable[2]+segsize[2],0,segsize[2]*(iright-1));
+			segtable[2] = realloc(segtable[2], segsize[2]*iright*sizeof(u8));
+			memset(segtable[2]+segsize[2],0,segsize[2]*(iright-1));
 			segsize[2] *= iright;
 			break;
 
@@ -1063,16 +1101,16 @@ void JIR_exec(JIRIMAGE *image) {
 			} else if(inst.type[0] == JIRTYPE_F64) {
 				port_f64[inst.operand[0].r] = f64right;
 			} else {
-				port_u64[inst.operand[0].r] = iright;
+				port[inst.operand[0].r] = iright;
 			}
 			port_types[inst.operand[0].r] = inst.type[0];
 			break;
 		case JIROP_GETPORT:
 		case JIROP_GETARG:
 		case JIROP_GETRET:
-			iright = port_u64[inst.operand[2].r] & imask;
+			iright = port[inst.operand[2].r] & imask;
 			if(issignedint)
-				iright = SIGN_EXTEND(iright, iarithBits[inst.type[0]]);
+				iright = SIGN_EXTEND(iright, iarithbits[inst.type[0]]);
 
 			if(inst.type[0] >= JIRTYPE_PTR_LOCAL && inst.type[0] <= JIRTYPE_PTR_HEAP) {
 				reg_ptr[inst.operand[0].r] = port_ptr[inst.operand[2].r];
@@ -1087,58 +1125,68 @@ void JIR_exec(JIRIMAGE *image) {
 			break;
 
 		case JIROP_CALL:
-			procidStack[calldepth] = procid;
-			pcStack[calldepth] = newpc; // store newpc so we return to the next inst
+			procidstack[calldepth] = procid;
+			pcstack[calldepth] = newpc; // store newpc so we return to the next inst
 			++calldepth;
 			if(inst.immediate[0])
 				procid = inst.operand[0].imm_u64;
 			else
 				procid = reg[inst.operand[0].r];
 			proc = image->proctab[procid];
-			//printf("calling proc %lu\n",procid);
 			newpc = 0;
 			break;
 		case JIROP_RET:
-			//printf("returning from proc %lu\n",procid);
 			--calldepth;
-			procid = procidStack[calldepth];
-			newpc = pcStack[calldepth];
+			procid = procidstack[calldepth];
+			newpc = pcstack[calldepth];
 			proc = image->proctab[procid];
 			break;
 
 		case JIROP_IOREAD:
-			assert("INVALID ADDRESS"&&
-			segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] > reg_ptr[inst.operand[1].r]);
-			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
-			assert("IOREAD FAILURE" &&
-					read((unsigned int)reg[inst.operand[0].r],(char*)ptr,(size_t)reg[inst.operand[2].r])!=-1);
+			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] <= reg_ptr[inst.operand[1].r]) {
+				run = JIR_errortrace("ERROR: INVALID POINTER\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
+			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
+			iocallval = read((unsigned int)reg[inst.operand[0].r],(char*)ptr,(size_t)reg[inst.operand[2].r]);
+			iocallerror = "ERROR: IOREAD FAILED\n";
 			break;
 		case JIROP_IOWRITE:
-			assert("INVALID ADDRESS"&&
-			segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] > reg_ptr[inst.operand[1].r]);
-			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
-			assert("IOWRITE FAILURE" &&
-					write((unsigned int)reg[inst.operand[0].r],(void*)ptr,(size_t)reg[inst.operand[2].r])!=-1);
+			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] <= reg_ptr[inst.operand[1].r]) {
+				run = JIR_errortrace("ERROR: INVALID POINTER\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
+			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
+			iocallval = write((unsigned int)reg[inst.operand[0].r],(void*)ptr,(size_t)reg[inst.operand[2].r]);
+			iocallerror = "ERROR: IOWRITE FAILED\n";
 			break;
 		case JIROP_IOOPEN:
-			assert("INVALID ADDRESS"&&
-			segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] > reg_ptr[inst.operand[0].r]);
-			ptr = segTable[PTRTYPE_TO_SEGMENT(inst.type[0])] + reg_ptr[inst.operand[0].r];
-			assert("IOOPEN FAILURE" && open((char*)ptr,(int)reg[inst.operand[1].r])!=-1);
+			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] <= reg_ptr[inst.operand[0].r]) {
+				run = JIR_errortrace("ERROR: INVALID POINTER\n",
+					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+			}
+			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[0])] + reg_ptr[inst.operand[0].r];
+			iocallval = open((char*)ptr,(int)reg[inst.operand[1].r]);
+			iocallerror = "ERROR: IOOPEN FAILED\n";
 			break;
 		case JIROP_IOCLOSE:
-			assert("IOCLOSE FAILURE" && close((unsigned int)reg[inst.operand[0].r])!=-1);
+			iocallval = close((unsigned int)reg[inst.operand[0].r]);
+			iocallerror = "ERROR: IOCLOSE FAILED\n";
 			break;
 
 		case JIROP_HALT:
 			run = false;
 			break;
 		}
+
+		if(iocallval == -1) {
+			run = JIR_errortrace(iocallerror, image->proctab, pc, procid, pcstack, procidstack, calldepth);
+		}
 	}
 
 	image->local_pos = local_pos;
 	image->localbase_pos = localbase_pos;
-	image->heap = segTable[2];
+	image->heap = segtable[2];
 	image->heapsize = segsize[2];
 }
 
@@ -1155,7 +1203,7 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab) {
 	i->localbase_pos = 0;
 	i->local_pos = 0;
 	i->port_types = malloc(64 * sizeof(JIRTYPE));
-	i->port_u64 = malloc(64 * sizeof(u64));
+	i->port = malloc(64 * sizeof(u64));
 	i->port_ptr = malloc(64 * sizeof(u64));
 	i->port_f32 = malloc(64 * sizeof(f32));
 	i->port_f64 = malloc(64 * sizeof(f64));
@@ -1167,7 +1215,7 @@ void JIRIMAGE_destroy(JIRIMAGE *i) {
 	free(i->heap);
 	free(i->localbase);
 	free(i->port_types);
-	free(i->port_u64);
+	free(i->port);
 	free(i->port_ptr);
 	free(i->port_f32);
 	free(i->port_f64);
@@ -1179,7 +1227,7 @@ int main(int argc, char **argv) {
 	{
 		JIR instarr[] = {
 			MOVEOPIMM(F32, REG(2), IMMF32(112.4367)),
-			CASTOP(BITCAST,U64,F32,REG(1),REG(2)),
+			CASTOP(BITCAST,PTR_LOCAL,F32,REG(1),REG(2)),
 			DUMPREGOP(F32, REG(2)),
 			DUMPREGOP(U64, REG(1)),
 			MOVEOPIMM(U64,REG(0),IMMU64(0xffffffffff000000)),
