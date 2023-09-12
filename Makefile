@@ -1,5 +1,4 @@
-CC = clang
-CFLAGS = -g -Wall -Wpedantic -Werror
+CFLAGS = -g -Wall -Wpedantic -Werror -Wno-missing-braces
 LDFLAGS = -lm
 
 all:

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <assert.h>
 
 #define IS_POW_2(x) ((x & (x-1)) == 0)
 #define MAX(a,b) (((a) > (b)) ? (a) : (b))
@@ -14,6 +15,8 @@
 #define Arr(T) T *
 #define Map(K, V) struct { K key; V value; } *
 #define Dict(V) struct { char *key; V value; } *
+#define UNREACHABLE assert(0)
+#define JINLINE __attribute__((always_inline)) inline
 
 typedef int64_t s64;
 typedef uint64_t u64;

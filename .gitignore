@@ -20,3 +20,5 @@ test/proc/proc1
 test/proc/proc2
 test/unaryops
 lex.c
+names.txt
+test.py
