@@ -27,6 +27,8 @@ void JIR_print(JIR inst);
 bool JIR_errortrace(char *msg, JIR **proctab, u64 pc, u64 procid, u64 *pcstack, u64 *procidstack, u64 calldepth);
 bool JIR_verify(JIR **proctab, u64 nprocs);
 void JIR_exec(JIRIMAGE *image);
+void JIRIMAGE_destroy(JIRIMAGE *i);
+void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 
 #define OPERAND(field, data) (JIROPERAND){ .field = data }
 #define PORT(index) (JIROPERAND){ .r = index }
