@@ -2,8 +2,8 @@ CFLAGS = -g -Wall -Wpedantic -Werror -Wno-missing-braces
 LDFLAGS = -lm
 
 all:
-	$(CC) $(CFLAGS) jir.c -o jir $(LDFLAGS)
+	$(CC) $(CFLAGS) test_jir.c -o test_jir $(LDFLAGS)
 debug:
-	$(CC) -DDEBUG $(CFLAGS) jir.c -o jir $(LDFLAGS)
+	$(CC) -DDEBUG $(CFLAGS) test_jir.c -o test_jir $(LDFLAGS)
 
 .PHONY: all debug
