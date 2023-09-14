@@ -637,6 +637,35 @@ bool JIR_verify(JIRIMAGE *image) {
 	while(procid < nprocs) {
 		JIR inst = proctab[procid][pc++];
 
+		if(inst.opcode == JIROP_HALT) {
+			pc = 0;
+			++procid;
+			continue;
+		}
+
+		if(inst.opcode != JIROP_LABEL)
+			continue;
+
+		if(inst.operand[0].label > nlabels) {
+			printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
+			JIR_print(inst);
+			printf("ERROR: LABELS MUST BE DEFINED IN ORDER\n");
+			return false;
+		}
+
+		if(nlabels >= cap) {
+			cap <<= 1;
+			labels = realloc(labels, cap * sizeof(u64));
+		}
+		labels[nlabels++] = pc + 1;
+	}
+
+	procid = 0;
+	pc = 0;
+
+	while(procid < nprocs) {
+		JIR inst = proctab[procid][pc++];
+
 		bool type_0_int = (inst.type[0] >= JIRTYPE_S64 && inst.type[0] <= JIRTYPE_U8);
 		bool type_1_int = (inst.type[1] >= JIRTYPE_S64 && inst.type[1] <= JIRTYPE_U8);
 		bool type_0_f32 = (inst.type[0] == JIRTYPE_F32);
@@ -683,24 +712,16 @@ bool JIR_verify(JIRIMAGE *image) {
 			return false;
 		}
 
+		if((inst.opcode == JIROP_BRANCH || inst.opcode == JIROP_JMP) && inst.operand[2].label >= nlabels) {
+			printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
+			JIR_print(inst);
+			printf("ERROR: LABEL %lu NOT DEFINED\n", inst.operand[2].label);
+			return false;
+		}
+
 		if(inst.opcode == JIROP_HALT) {
 			pc = 0;
 			++procid;
-		}
-
-		if(inst.opcode == JIROP_LABEL) { // we handle labels here too
-			if(inst.operand[0].label > nlabels) {
-				printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
-				JIR_print(inst);
-				printf("ERROR: LABELS MUST BE DEFINED IN ORDER\n");
-				return false;
-			}
-
-			if(nlabels >= cap) {
-				cap <<= 1;
-				labels = realloc(labels, cap * sizeof(u64));
-			}
-			labels[nlabels++] = pc + 1;
 		}
 	}
 
