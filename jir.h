@@ -3,6 +3,7 @@
 
 /* TODO
  *
+ * labels
  * better testing
  * JIR_translate_c()
  */
@@ -12,7 +13,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <ctype.h>
 #include <assert.h>
 #include <math.h>
 #include <fcntl.h>
@@ -25,7 +25,7 @@ typedef union JIROPERAND JIROPERAND;
 
 void JIR_print(JIR inst);
 bool JIR_errortrace(char *msg, JIR **proctab, u64 pc, u64 procid, u64 *pcstack, u64 *procidstack, u64 calldepth);
-bool JIR_verify(JIR **proctab, u64 nprocs);
+bool JIR_verify(JIRIMAGE *image);
 void JIR_exec(JIRIMAGE *image);
 void JIRIMAGE_destroy(JIRIMAGE *i);
 void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
@@ -38,6 +38,7 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 #define IMMF32(data) (JIROPERAND){ .imm_f32 = data }
 #define IMMF64(data) (JIROPERAND){ .imm_f64 = data }
 #define PTR(data) (JIROPERAND){ .offset = data }
+#define LABEL(l) (JIROPERAND){ .label = l }
 
 #define DUMPMEMOP(t, imm_start, imm_end, start, end)\
 	(JIR){\
@@ -110,47 +111,36 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 		.operand[2] = {0},\
 	}
 
-#define BRANCHOP(cond, offset)\
+#define LABELOP(label)\
+	(JIR){\
+		.opcode = JIROP_LABEL,\
+		.type = {0},\
+		.operand[0] = label,\
+		.operand[1] = {0},\
+		.operand[2] = {0},\
+		.immediate = {0},\
+		.debugmsg = NULL,\
+	}
+
+#define BRANCHOP(cond, label)\
 	(JIR){\
 		.opcode = JIROP_BRANCH,\
 		.type = {0},\
 		.operand[0] = cond,\
 		.operand[1] = {0},\
-		.operand[2] = offset,\
+		.operand[2] = label,\
 		.immediate = {0},\
 		.debugmsg = NULL,\
 	}
 
-#define BRANCHOPIMM(cond, offset)\
-	(JIR){\
-		.opcode = JIROP_BRANCH,\
-		.type = {0},\
-		.operand[0] = cond,\
-		.operand[1] = {0},\
-		.operand[2] = offset,\
-		.immediate = { false, false, true },\
-		.debugmsg = NULL,\
-	}
-
-#define JMPOP(offset)\
+#define JMPOP(label)\
 	(JIR){\
 		.opcode = JIROP_JMP,\
 		.type = {0},\
 		.operand[0] = {0},\
 		.operand[1] = {0},\
-		.operand[2] = offset,\
+		.operand[2] = label,\
 		.immediate = {0},\
-		.debugmsg = NULL,\
-	}
-
-#define JMPOPIMM(offset)\
-	(JIR){\
-		.opcode = JIROP_JMP,\
-		.type = {0},\
-		.operand[0] = {0},\
-		.operand[1] = {0},\
-		.operand[2] = offset,\
-		.immediate = { false, false, true },\
 		.debugmsg = NULL,\
 	}
 
@@ -399,83 +389,82 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#ifdef JIR_IMPL // implementation
-
-#define OPCODES     \
-	X(HALT)         \
-	X(AND)          \
-	X(OR)           \
-	X(XOR)          \
-	X(LSHIFT)       \
-	X(RSHIFT)       \
-	X(NOT)          \
-	X(ADD)          \
-	X(SUB)          \
-	X(MUL)          \
-	X(DIV)          \
-	X(MOD)          \
-	X(NEG)          \
-	X(EQ)           \
-	X(NE)           \
-	X(LE)           \
-	X(GT)           \
-	X(LT)           \
-	X(GE)           \
-	X(FADD)         \
-	X(FSUB)         \
-	X(FMUL)         \
-	X(FDIV)         \
-	X(FMOD)         \
-	X(FNEG)         \
-	X(FEQ)          \
-	X(FNE)          \
-	X(FLE)          \
-	X(FGT)          \
-	X(FLT)          \
-	X(FGE)          \
-	X(BRANCH)       \
-	X(JMP)          \
-	X(LOAD)         \
-	X(STOR)         \
-	X(VAL)          \
-	X(MOVE)         \
-	X(BFRAME)       \
-	X(EFRAME)       \
-	X(ALLOC)        \
-	X(CALL)         \
-	X(RET)          \
-	X(SETARG)       \
-	X(GETARG)       \
-	X(SETRET)       \
-	X(GETRET)       \
-	X(SETPORT)      \
-	X(GETPORT)      \
-	X(IOREAD)       \
-	X(IOWRITE)      \
-	X(IOOPEN)       \
-	X(IOCLOSE)      \
-	X(GROWHEAP)     \
-	X(BITCAST)      \
-	X(TYPECAST)     \
-	X(DUMPREG)      \
-	X(DUMPPORT)     \
-	X(DUMPMEM)      \
-	X(DEBUGMSG)     \
+#define OPCODES\
+	X(HALT)    \
+	X(AND)     \
+	X(OR)      \
+	X(XOR)     \
+	X(LSHIFT)  \
+	X(RSHIFT)  \
+	X(NOT)     \
+	X(ADD)     \
+	X(SUB)     \
+	X(MUL)     \
+	X(DIV)     \
+	X(MOD)     \
+	X(NEG)     \
+	X(EQ)      \
+	X(NE)      \
+	X(LE)      \
+	X(GT)      \
+	X(LT)      \
+	X(GE)      \
+	X(FADD)    \
+	X(FSUB)    \
+	X(FMUL)    \
+	X(FDIV)    \
+	X(FMOD)    \
+	X(FNEG)    \
+	X(FEQ)     \
+	X(FNE)     \
+	X(FLE)     \
+	X(FGT)     \
+	X(FLT)     \
+	X(FGE)     \
+	X(BRANCH)  \
+	X(JMP)     \
+	X(LABEL)   \
+	X(LOAD)    \
+	X(STOR)    \
+	X(VAL)     \
+	X(MOVE)    \
+	X(BFRAME)  \
+	X(EFRAME)  \
+	X(ALLOC)   \
+	X(CALL)    \
+	X(RET)     \
+	X(SETARG)  \
+	X(GETARG)  \
+	X(SETRET)  \
+	X(GETRET)  \
+	X(SETPORT) \
+	X(GETPORT) \
+	X(IOREAD)  \
+	X(IOWRITE) \
+	X(IOOPEN)  \
+	X(IOCLOSE) \
+	X(GROWHEAP)\
+	X(BITCAST) \
+	X(TYPECAST)\
+	X(DUMPREG) \
+	X(DUMPPORT)\
+	X(DUMPMEM) \
+	X(DEBUGMSG)\
 	X(NOOP)
 
-#define TYPES         \
-	X(S64)        \
-	X(S32)        \
-	X(S16)        \
-	X(S8)         \
-	X(U64)        \
-	X(U32)        \
-	X(U16)        \
-	X(U8)         \
-	X(PTR_LOCAL)  \
-	X(PTR_GLOBAL) \
-	X(PTR_HEAP)   \
-	X(F32)        \
+#define TYPES    \
+	X(S64)       \
+	X(S32)       \
+	X(S16)       \
+	X(S8)        \
+	X(U64)       \
+	X(U32)       \
+	X(U16)       \
+	X(U8)        \
+	X(PTR_LOCAL) \
+	X(PTR_GLOBAL)\
+	X(PTR_HEAP)  \
+	X(F32)       \
 	X(F64)
 
 size_t TYPE_SIZES[] = {
@@ -492,9 +481,9 @@ size_t TYPE_SIZES[] = {
 	8, // f64
 };
 
-#define SEGMENTS   \
-	X(LOCAL)   \
-	X(GLOBAL)  \
+#define SEGMENTS\
+	X(LOCAL)    \
+	X(GLOBAL)   \
 	X(HEAP)
 
 #define TOKEN_TO_OP(t) (JIROP)(t - TOKEN_HALT)
@@ -548,6 +537,7 @@ union JIROPERAND {
 	double imm_f64;
 	u64 procid;
 	u64 offset;
+	u64 label;
 };
 
 struct JIR {
@@ -577,7 +567,11 @@ struct JIRIMAGE {
 	u64 *port_ptr;
 	float *port_f32;
 	double *port_f64;
+	u64 *labels;
+	size_t nlabels;
 };
+
+#ifdef JIR_IMPL // implementation
 
 JINLINE void JIR_print(JIR inst) {
 	printf("(JIR) {\n\
@@ -633,8 +627,13 @@ JINLINE bool JIR_errortrace(char *msg, JIR **proctab, u64 pc, u64 procid, u64 *p
 	return false;
 }
 
-bool JIR_verify(JIR **proctab, u64 nprocs) {
+bool JIR_verify(JIRIMAGE *image) {
 	u64 procid = 0, pc = 0;
+	JIR **proctab = image->proctab;
+	u64 nprocs = image->nprocs;
+	size_t nlabels = 0, cap = 16;
+	u64 *labels = malloc(cap * sizeof(u64));
+
 	while(procid < nprocs) {
 		JIR inst = proctab[procid][pc++];
 
@@ -688,7 +687,24 @@ bool JIR_verify(JIR **proctab, u64 nprocs) {
 			pc = 0;
 			++procid;
 		}
+
+		if(inst.opcode == JIROP_LABEL) { // we handle labels here too
+			if(inst.operand[0].label > nlabels) {
+				printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
+				JIR_print(inst);
+				printf("ERROR: LABELS MUST BE DEFINED IN ORDER\n");
+				return false;
+			}
+
+			if(nlabels >= cap) {
+				cap <<= 1;
+				labels = realloc(labels, cap * sizeof(u64));
+			}
+			labels[nlabels++] = pc + 1;
+		}
 	}
+
+	image->labels = realloc(labels, nlabels * sizeof(u64));
 
 	return true;
 }
@@ -976,12 +992,11 @@ void JIR_exec(JIRIMAGE *image) {
 				reg[inst.operand[0].r] = ileft >= iright;
 			break;
 		case JIROP_JMP:
-			newpc = pc + iright;
+			newpc = image->labels[inst.operand[2].label];
 			break;
 		case JIROP_BRANCH:
 			if(reg[inst.operand[0].r] == 0)
-				iright = 1;
-			newpc = pc + iright;
+				newpc = image->labels[inst.operand[2].label];
 			break;
 		case JIROP_MOVE:
 			if(inst.type[0] == JIRTYPE_F32) {
@@ -1253,6 +1268,7 @@ JINLINE void JIRIMAGE_destroy(JIRIMAGE *i) {
 	free(i->port_ptr);
 	free(i->port_f32);
 	free(i->port_f64);
+	free(i->labels);
 	*i = (JIRIMAGE){0};
 }
 

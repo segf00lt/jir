@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(proctab, nprocs))
+		if(JIR_verify(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(proctab, nprocs))
+		if(JIR_verify(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
 		strcpy((char*)image.global, "Hello, World!\n");
-		if(JIR_verify(proctab, nprocs))
+		if(JIR_verify(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(proctab, nprocs))
+		if(JIR_verify(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(proctab, nprocs))
+		if(JIR_verify(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -137,9 +137,10 @@ int main(int argc, char **argv) {
 			DUMPREGOP(U64,REG(2)),
 			ALLOCOP(S64,REG(3)),
 			STOROP(PTR_LOCAL,S64,REG(3),REG(2)),
-			BRANCHOPIMM(REG(2),IMMU64(3)),
+			BRANCHOP(REG(2), LABEL(0)),
 			MOVEOPIMM(U64, REG(1), IMMU64(12)),
 			SETARGOP(U64,PORT(1),REG(1)),
+			LABELOP(LABEL(0)),
 			DUMPREGOP(U64,REG(1)),
 			DUMPPORTOP(U64,PORT(1)),
 			CALLOP(IMMU64(2)),
@@ -165,7 +166,7 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 3;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(proctab, nprocs))
+		if(JIR_verify(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -187,7 +188,7 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(proctab, nprocs))
+		if(JIR_verify(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
