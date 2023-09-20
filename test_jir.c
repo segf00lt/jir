@@ -28,7 +28,8 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(&image))
+		JIR_maplabels(proctab, nprocs);
+		if(JIR_preprocess(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -54,7 +55,8 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(&image))
+		JIR_maplabels(proctab, nprocs);
+		if(JIR_preprocess(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -74,7 +76,8 @@ int main(int argc, char **argv) {
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
 		strcpy((char*)image.global, "Hello, World!\n");
-		if(JIR_verify(&image))
+		JIR_maplabels(proctab, nprocs);
+		if(JIR_preprocess(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -97,7 +100,8 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(&image))
+		JIR_maplabels(proctab, nprocs);
+		if(JIR_preprocess(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -115,7 +119,8 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(&image))
+		JIR_maplabels(proctab, nprocs);
+		if(JIR_preprocess(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
@@ -137,16 +142,18 @@ int main(int argc, char **argv) {
 			DUMPREGOP(U64,REG(2)),
 			ALLOCOP(S64,REG(3)),
 			STOROP(PTR_LOCAL,S64,REG(3),REG(2)),
-			BRANCHOP(REG(2), LABEL(0)),
+			BRANCHOP(REG(2), LABEL("is_multiple_of_2")),
 			MOVEOPIMM(U64, REG(1), IMMU64(12)),
 			SETARGOP(U64,PORT(1),REG(1)),
-			LABELOP(LABEL(0)),
+			LABELOP(LABEL("is_multiple_of_2")),
 			DUMPREGOP(U64,REG(1)),
 			DUMPPORTOP(U64,PORT(1)),
 			CALLOP(IMMU64(2)),
 			LOADOP(S64,PTR_LOCAL,REG(2),REG(3)),
 			DUMPREGOP(U64,REG(2)),
 			EFRAMEOP,
+			LABELOP(LABEL("proc1_return")),
+			LABELOP(LABEL("unreachable_instruction")),
 			RETOP,
 			HALTOP,
 		};
@@ -166,8 +173,8 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 3;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(&image))
-			JIR_exec(&image);
+		if(JIR_preprocess(&image))
+				JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}
 
@@ -188,7 +195,8 @@ int main(int argc, char **argv) {
 		JIRIMAGE image;
 		u64 nprocs = 1;
 		JIRIMAGE_init(&image, proctab, nprocs);
-		if(JIR_verify(&image))
+		JIR_maplabels(proctab, nprocs);
+		if(JIR_preprocess(&image))
 			JIR_exec(&image);
 		JIRIMAGE_destroy(&image);
 	}

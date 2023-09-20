@@ -3,7 +3,6 @@
 
 /* TODO
  *
- * labels
  * better testing
  * JIR_translate_c()
  */
@@ -25,7 +24,7 @@ typedef union JIROPERAND JIROPERAND;
 
 void JIR_print(JIR inst);
 bool JIR_errortrace(char *msg, JIR **proctab, u64 pc, u64 procid, u64 *pcstack, u64 *procidstack, u64 calldepth);
-bool JIR_verify(JIRIMAGE *image);
+bool JIR_preprocess(JIRIMAGE *image);
 void JIR_exec(JIRIMAGE *image);
 void JIRIMAGE_destroy(JIRIMAGE *i);
 void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
@@ -47,7 +46,7 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 		.operand = { {0}, start, end },\
 		.immediate = {0, imm_start, imm_end },\
 		.debugmsg = NULL,\
-	}\
+	}
 
 #define DEBUGMSGOP(msg)\
 	(JIR){\
@@ -56,7 +55,7 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 		.operand = {0},\
 		.immediate = {0},\
 		.debugmsg = msg,\
-	}\
+	}
 
 #define BINOP(op, t, dest, left, right)\
 	(JIR){\
@@ -537,7 +536,10 @@ union JIROPERAND {
 	double imm_f64;
 	u64 procid;
 	u64 offset;
-	u64 label;
+	struct {
+		s64 jump;
+		const char *label;
+	};
 };
 
 struct JIR {
@@ -567,8 +569,6 @@ struct JIRIMAGE {
 	u64 *port_ptr;
 	float *port_f32;
 	double *port_f64;
-	u64 *labels;
-	size_t nlabels;
 };
 
 #ifdef JIR_IMPL // implementation
@@ -577,13 +577,13 @@ JINLINE void JIR_print(JIR inst) {
 	printf("(JIR) {\n\
 	.opcode = JIROP_%s,\n\
 	.type[0] = JIRTYPE_%s,\n\
-	.operand[0] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu },\n\
+	.operand[0] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu, .offset = %lu, .jump = %li, .label = %s },\n\
 	.immediate[0] = %i,\n\
 	.type[1] = JIRTYPE_%s,\n\
-	.operand[1] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu },\n\
+	.operand[1] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu, .offset = %lu, .jump = %li, .label = %s },\n\
 	.immediate[1] = %i,\n\
 	.type[2] = JIRTYPE_%s,\n\
-	.operand[2] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu },\n\
+	.operand[2] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu, .offset = %lu, .jump = %li, .label = %s },\n\
 	.immediate[2] = %i,\n\
 	.debugmsg = %s,\n}\n",
 	opcodesdebug[inst.opcode],
@@ -593,6 +593,9 @@ JINLINE void JIR_print(JIR inst) {
 	inst.operand[0].imm_f32,
 	inst.operand[0].imm_f64,
 	inst.operand[0].procid,
+	inst.operand[0].offset,
+	inst.operand[0].jump,
+	inst.operand[0].label,
 	inst.immediate[0],
 	typesdebug[inst.type[1]],
 	inst.operand[1].r,
@@ -600,6 +603,9 @@ JINLINE void JIR_print(JIR inst) {
 	inst.operand[1].imm_f32,
 	inst.operand[1].imm_f64,
 	inst.operand[1].procid,
+	inst.operand[1].offset,
+	inst.operand[1].jump,
+	inst.operand[1].label,
 	inst.immediate[1],
 	typesdebug[inst.type[2]],
 	inst.operand[2].r,
@@ -607,12 +613,15 @@ JINLINE void JIR_print(JIR inst) {
 	inst.operand[2].imm_f32,
 	inst.operand[2].imm_f64,
 	inst.operand[2].procid,
+	inst.operand[2].offset,
+	inst.operand[2].jump,
+	inst.operand[2].label,
 	inst.immediate[2],
 	inst.debugmsg);
 }
 
 JINLINE bool JIR_errortrace(char *msg, JIR **proctab, u64 pc, u64 procid, u64 *pcstack, u64 *procidstack, u64 calldepth) {
-	fputs("JIR TRACE: ERROR TRACING\n", stdout);
+	fputs("JIR ERROR TRACE: ERROR TRACING\n", stdout);
 	pcstack[calldepth] = pc + 1;
 	procidstack[calldepth] = procid;
 	JIR inst;
@@ -627,41 +636,163 @@ JINLINE bool JIR_errortrace(char *msg, JIR **proctab, u64 pc, u64 procid, u64 *p
 	return false;
 }
 
-bool JIR_verify(JIRIMAGE *image) {
+#define _JIR_MAPLABELS_HASH_NUM 37
+
+bool JIR_maplabels(JIR **proctab, u64 nprocs) {
+#ifdef DEBUG
+	u64 tabsize = 0x2;
+#else
+	u64 tabsize = 0x40; // NOTE this must be a power of 2
+#endif
+	u64 nlabels = 0;
+	const char **keys = calloc(tabsize, sizeof(const char*));
+	u64 *positions = malloc(tabsize * sizeof(u64));
+
+	for(u64 procid = 0; procid < nprocs; ++procid) {
+		JIR *proc = proctab[procid];
+
+		// define labels
+		for(u64 pc = 0; proc[pc].opcode != JIROP_HALT; ++pc) {
+			JIR inst = proc[pc];
+
+			if(inst.opcode != JIROP_LABEL)
+				continue;
+
+			++nlabels;
+
+			if(nlabels > tabsize) {
+				u64 new_tabsize = tabsize << 1;
+				const char **new_keys = calloc(new_tabsize, sizeof(const char*));
+				u64 *new_positions = malloc(new_tabsize * sizeof(u64));
+
+				for(u64 i = 0; i < tabsize; ++i) {
+					u64 hash = 0;
+					const char *l = keys[i];
+					for(int h = 0; l[h]; ++h)
+						hash += l[h] * _JIR_MAPLABELS_HASH_NUM;
+					hash &= new_tabsize-1;
+					u64 initial = hash;
+
+					if(new_keys[hash]) {
+						do {
+							++hash;
+							hash &= new_tabsize-1;
+							if(!new_keys[hash])
+								break;
+						} while(hash != initial);
+					}
+
+					new_keys[hash] = keys[i];
+					new_positions[hash] = positions[i];
+				}
+
+				free(keys);
+				free(positions);
+
+				keys = new_keys;
+				positions = new_positions;
+				tabsize = new_tabsize;
+			}
+
+			u64 hash = 0;
+			const char *l = inst.operand[0].label;
+			for(int h = 0; l[h]; ++h)
+				hash += l[h] * _JIR_MAPLABELS_HASH_NUM;
+			hash &= tabsize-1;
+			u64 initial = hash;
+
+			if(keys[hash]) {
+				if(!strcmp(keys[hash], l)) {
+					printf("JIR MAP LABELS:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
+					JIR_print(inst);
+					printf("ERROR: REDEFINITION OF LABEL '%s' PREVIOUSLY DEFINED AT INSTRUCTION %lu\n", l, positions[hash]-1);
+					free(keys);
+					free(positions);
+					return false;
+				}
+
+				do {
+					++hash;
+					hash &= tabsize-1;
+					if(!keys[hash])
+						break;
+
+					if(!strcmp(keys[hash], l)) {
+						printf("JIR MAP LABELS:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
+						JIR_print(inst);
+						printf("ERROR: REDEFINITION OF LABEL '%s' PREVIOUSLY DEFINED AT INSTRUCTION %lu\n", l, positions[hash]-1);
+						free(keys);
+						free(positions);
+						return false;
+					}
+				} while(hash != initial);
+			}
+
+			keys[hash] = l;
+			positions[hash] = pc + 1;
+		}
+
+		// replace labels with jumps
+		for(u64 pc = 0; proc[pc].opcode != JIROP_HALT; ++pc) {
+			JIR inst = proc[pc];
+
+			if(inst.opcode != JIROP_BRANCH && inst.opcode != JIROP_HALT)
+				continue;
+
+			u64 hash = 0;
+			const char *l = inst.operand[2].label;
+			for(int h = 0; l[h]; ++h)
+				hash += l[h] * _JIR_MAPLABELS_HASH_NUM;
+			hash &= tabsize-1;
+
+			if(!keys[hash]) {
+				printf("JIR MAP LABELS:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
+				JIR_print(inst);
+				printf("ERROR: REFERENCE TO UNDEFINED LABEL '%s'\n", l);
+				free(keys);
+				free(positions);
+				return false;
+			} else if(strcmp(keys[hash], l)) {
+				u64 initial = hash;
+				do {
+					++hash;
+					hash &= tabsize-1;
+					if(!keys[hash])
+						continue;
+					if(strcmp(keys[hash], l))
+						continue;
+					break;
+				} while(hash != initial);
+
+				if(hash == initial) {
+					printf("JIR MAP LABELS:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
+					JIR_print(inst);
+					printf("ERROR: REFERENCE TO UNDEFINED LABEL '%s'\n", l);
+					free(keys);
+					free(positions);
+					return false;
+				}
+			}
+
+			proc[pc].operand[2].jump = (positions[hash] > pc) ? (s64)(positions[hash] - pc) : (s64)(-pc + positions[hash]);
+		}
+
+		nlabels = 0;
+		memset(keys, 0, tabsize * sizeof(const char*));
+	}
+
+	free(keys);
+	free(positions);
+
+	return true;
+}
+
+bool JIR_preprocess(JIRIMAGE *image) {
 	u64 procid = 0, pc = 0;
 	JIR **proctab = image->proctab;
 	u64 nprocs = image->nprocs;
-	size_t nlabels = 0, cap = 16;
-	u64 *labels = malloc(cap * sizeof(u64));
 
-	while(procid < nprocs) {
-		JIR inst = proctab[procid][pc++];
-
-		if(inst.opcode == JIROP_HALT) {
-			pc = 0;
-			++procid;
-			continue;
-		}
-
-		if(inst.opcode != JIROP_LABEL)
-			continue;
-
-		if(inst.operand[0].label > nlabels) {
-			printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
-			JIR_print(inst);
-			printf("ERROR: LABELS MUST BE DEFINED IN ORDER\n");
-			return false;
-		}
-
-		if(nlabels >= cap) {
-			cap <<= 1;
-			labels = realloc(labels, cap * sizeof(u64));
-		}
-		labels[nlabels++] = pc + 1;
-	}
-
-	procid = 0;
-	pc = 0;
+	bool ret = true;
 
 	while(procid < nprocs) {
 		JIR inst = proctab[procid][pc++];
@@ -677,28 +808,32 @@ bool JIR_verify(JIRIMAGE *image) {
 
 		if(inst.opcode < JIROP_HALT || inst.opcode > JIROP_NOOP) {
 			printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\nERROR: INVALID OPCODE %u\n",pc,procid,inst.opcode);
-			return false;
+			ret = false;
+			continue;
 		}
 
 		if(inst.opcode >= JIROP_FADD && inst.opcode <= JIROP_FGE && inst.type[0] < JIRTYPE_F32) {
 			printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
 			JIR_print(inst);
 			printf("ERROR: INVALID TYPE TO FLOATING POINT INSTRUCTION\n");
-			return false;
+			ret = false;
+			continue;
 		}
 
 		if(inst.opcode >= JIROP_ADD && inst.opcode <= JIROP_GE && inst.type[0] >= JIRTYPE_F32) {
 			printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
 			JIR_print(inst);
 			printf("ERROR: INVALID TYPE TO INTEGER INSTRUCTION\n");
-			return false;
+			ret = false;
+			continue;
 		}
 
 		if(inst.opcode == JIROP_MOVE && inst.type[0] != inst.type[2]) {
 			printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
 			JIR_print(inst);
 			printf("ERROR: INCOMPATIBLE OPERAND TYPES TO MOVE INSTRUCTION\n");
-			return false;
+			ret = false;
+			continue;
 		}
 
 		if((inst.opcode == JIROP_BITCAST || inst.opcode == JIROP_TYPECAST)
@@ -709,14 +844,8 @@ bool JIR_verify(JIRIMAGE *image) {
 			printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
 			JIR_print(inst);
 			printf("ERROR: INVALID TYPE PAIR TO CAST\n");
-			return false;
-		}
-
-		if((inst.opcode == JIROP_BRANCH || inst.opcode == JIROP_JMP) && inst.operand[2].label >= nlabels) {
-			printf("JIR VERIFY:\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
-			JIR_print(inst);
-			printf("ERROR: LABEL %lu NOT DEFINED\n", inst.operand[2].label);
-			return false;
+			ret = false;
+			continue;
 		}
 
 		if(inst.opcode == JIROP_HALT) {
@@ -725,9 +854,9 @@ bool JIR_verify(JIRIMAGE *image) {
 		}
 	}
 
-	image->labels = realloc(labels, nlabels * sizeof(u64));
+	ret = JIR_maplabels(proctab, nprocs);
 
-	return true;
+	return ret;
 }
 
 void JIR_exec(JIRIMAGE *image) {
@@ -802,7 +931,7 @@ void JIR_exec(JIRIMAGE *image) {
 		pc = newpc;
 		JIR inst = proc[pc];
 #ifdef DEBUG
-		printf("JIR TRACE: EXECUTION LOG\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
+		printf("JIR EXCECUTION TRACE: EXECUTION LOG\nINSTRUCTION %lu, PROC %lu:\n", pc, procid);
 		JIR_print(inst);
 #endif
 		newpc = pc + 1;
@@ -831,6 +960,8 @@ void JIR_exec(JIRIMAGE *image) {
 		switch(inst.opcode) {
 		default:
 			UNREACHABLE;
+			break;
+		case JIROP_LABEL:
 			break;
 		case JIROP_NOOP:
 			break;
@@ -1013,11 +1144,11 @@ void JIR_exec(JIRIMAGE *image) {
 				reg[inst.operand[0].r] = ileft >= iright;
 			break;
 		case JIROP_JMP:
-			newpc = image->labels[inst.operand[2].label];
+			newpc = (s64)pc + inst.operand[2].jump;
 			break;
 		case JIROP_BRANCH:
-			if(reg[inst.operand[0].r] == 0)
-				newpc = image->labels[inst.operand[2].label];
+			if(reg[inst.operand[0].r])
+				newpc = (s64)pc + inst.operand[2].jump;
 			break;
 		case JIROP_MOVE:
 			if(inst.type[0] == JIRTYPE_F32) {
@@ -1289,7 +1420,6 @@ JINLINE void JIRIMAGE_destroy(JIRIMAGE *i) {
 	free(i->port_ptr);
 	free(i->port_f32);
 	free(i->port_f64);
-	free(i->labels);
 	*i = (JIRIMAGE){0};
 }
 
