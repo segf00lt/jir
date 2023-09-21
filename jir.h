@@ -3,8 +3,9 @@
 
 /* TODO
  *
- * better testing
  * JIR_translate_c()
+ * JIR_translate_nasm()
+ * JIR_translate_x64()
  */
 
 #include <stdio.h>
@@ -32,12 +33,18 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 #define OPERAND(field, data) (JIROPERAND){ .field = data }
 #define PORT(index) (JIROPERAND){ .r = index }
 #define REG(index) (JIROPERAND){ .r = index }
-#define IMMU64(data) (JIROPERAND){ .imm_u64 = data }
-#define IMMS64(data) (JIROPERAND){ .imm_s64 = data }
-#define IMMF32(data) (JIROPERAND){ .imm_f32 = data }
-#define IMMF64(data) (JIROPERAND){ .imm_f64 = data }
-#define PTR(data) (JIROPERAND){ .offset = data }
-#define LABEL(l) (JIROPERAND){ .label = l }
+#define IMMU64(data) (JIROPERAND){ .imm_u64 = (data) }
+#define IMMS64(data) (JIROPERAND){ .imm_u64 = (data) }
+#define IMMU32(data) (JIROPERAND){ .imm_u64 = (data & 0xffffffff) }
+#define IMMS32(data) (JIROPERAND){ .imm_u64 = (data & 0xffffffff) }
+#define IMMU16(data) (JIROPERAND){ .imm_u64 = (data & 0xffff) }
+#define IMMS16(data) (JIROPERAND){ .imm_u64 = (data & 0xffff) }
+#define IMMU8(data) (JIROPERAND){ .imm_u64 = (data & 0xff) }
+#define IMMS8(data) (JIROPERAND){ .imm_u64 = (data & 0xff) }
+#define IMMF32(data) (JIROPERAND){ .imm_f32 = (data) }
+#define IMMF64(data) (JIROPERAND){ .imm_f64 = (data) }
+#define PTR(data) (JIROPERAND){ .offset = (data) }
+#define LABEL(l) (JIROPERAND){ .label = (l) }
 
 #define DUMPMEMOP(t, imm_start, imm_end, start, end)\
 	(JIR){\
@@ -110,7 +117,7 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 		.operand[2] = {0},\
 	}
 
-#define LABELOP(label)\
+#define DEFLABEL(label)\
 	(JIR){\
 		.opcode = JIROP_LABEL,\
 		.type = {0},\
@@ -245,9 +252,31 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
+#define SYSCALLOP(procid)\
+	(JIR){\
+		.opcode = JIROP_SYSCALL,\
+		.type = {0},\
+		.operand[0] = {0},\
+		.operand[1] = {0},\
+		.operand[2] = procid,\
+		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
+	}
+
 #define CALLOPINDIRECT(procid)\
 	(JIR){\
 		.opcode = JIROP_CALL,\
+		.type = {0},\
+		.operand[0] = procid,\
+		.operand[1] = {0},\
+		.operand[2] = {0},\
+		.immediate = {0},\
+		.debugmsg = NULL,\
+	}
+
+#define SYSCALLOPINDIRECT(procid)\
+	(JIR){\
+		.opcode = JIROP_SYSCALL,\
 		.type = {0},\
 		.operand[0] = procid,\
 		.operand[1] = {0},\
@@ -322,50 +351,6 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#define IOREADOP(t_ptr, fd, ptr, count)\
-	(JIR){\
-		.opcode = JIROP_IOREAD,\
-		.type = { JIRTYPE_S64, JIRTYPE_##t_ptr, JIRTYPE_U64 },\
-		.operand[0] = fd,\
-		.operand[1] = ptr,\
-		.operand[2] = count,\
-		.immediate = {0},\
-		.debugmsg = NULL,\
-	}
-
-#define IOWRITEOP(t_ptr, fd, ptr, count)\
-	(JIR){\
-		.opcode = JIROP_IOWRITE,\
-		.type = { JIRTYPE_S64, JIRTYPE_##t_ptr, JIRTYPE_U64 },\
-		.operand[0] = fd,\
-		.operand[1] = ptr,\
-		.operand[2] = count,\
-		.immediate = {0},\
-		.debugmsg = NULL,\
-	}
-
-#define IOOPENOP(t_ptr, ptr, flags)\
-	(JIR){\
-		.opcode = JIROP_IOOPEN,\
-		.type = { JIRTYPE_##t_ptr, JIRTYPE_S64,0 },\
-		.operand[0] = ptr,\
-		.operand[1] = flags,\
-		.operand[2] = {0},\
-		.immediate = {0},\
-		.debugmsg = NULL,\
-	}
-
-#define IOCLOSEOP(fd)\
-	(JIR){\
-		.opcode = JIROP_IOCLOSE,\
-		.type = { JIRTYPE_U64,0,0 },\
-		.operand[0] = fd,\
-		.operand[1] = {0},\
-		.operand[2] = {0},\
-		.immediate = {0},\
-		.debugmsg = NULL,\
-	}
-
 #define DUMPREGOP(t, r)\
 	(JIR){\
 		.opcode = JIROP_DUMPREG,\
@@ -432,16 +417,13 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 	X(ALLOC)   \
 	X(CALL)    \
 	X(RET)     \
+	X(SYSCALL) \
 	X(SETARG)  \
 	X(GETARG)  \
 	X(SETRET)  \
 	X(GETRET)  \
 	X(SETPORT) \
 	X(GETPORT) \
-	X(IOREAD)  \
-	X(IOWRITE) \
-	X(IOOPEN)  \
-	X(IOCLOSE) \
 	X(GROWHEAP)\
 	X(BITCAST) \
 	X(TYPECAST)\
@@ -534,7 +516,6 @@ union JIROPERAND {
 	u64 imm_u64;
 	float imm_f32;
 	double imm_f64;
-	u64 procid;
 	u64 offset;
 	struct {
 		s64 jump;
@@ -563,6 +544,10 @@ struct JIRIMAGE {
 	size_t localbasesize;
 	u64 local_pos;
 	u64 localbase_pos;
+	u64 *reg;
+	u64 *reg_ptr;
+	float *reg_f32;
+	double *reg_f64;
 	// ports are special registers for passing data between procedures, and in and out of the interpreter
 	JIRTYPE *port_types;
 	u64 *port;
@@ -577,13 +562,13 @@ JINLINE void JIR_print(JIR inst) {
 	printf("(JIR) {\n\
 	.opcode = JIROP_%s,\n\
 	.type[0] = JIRTYPE_%s,\n\
-	.operand[0] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu, .offset = %lu, .jump = %li, .label = %s },\n\
+	.operand[0] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .offset = %lu, .jump = %li, .label = %s },\n\
 	.immediate[0] = %i,\n\
 	.type[1] = JIRTYPE_%s,\n\
-	.operand[1] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu, .offset = %lu, .jump = %li, .label = %s },\n\
+	.operand[1] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .offset = %lu, .jump = %li, .label = %s },\n\
 	.immediate[1] = %i,\n\
 	.type[2] = JIRTYPE_%s,\n\
-	.operand[2] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .procid = %lu, .offset = %lu, .jump = %li, .label = %s },\n\
+	.operand[2] = { .r = %i, .imm_u64 = %lu, .imm_f32 = %f, .imm_f64 = %lf, .offset = %lu, .jump = %li, .label = %s },\n\
 	.immediate[2] = %i,\n\
 	.debugmsg = %s,\n}\n",
 	opcodesdebug[inst.opcode],
@@ -592,7 +577,6 @@ JINLINE void JIR_print(JIR inst) {
 	inst.operand[0].imm_u64,
 	inst.operand[0].imm_f32,
 	inst.operand[0].imm_f64,
-	inst.operand[0].procid,
 	inst.operand[0].offset,
 	inst.operand[0].jump,
 	inst.operand[0].label,
@@ -602,7 +586,6 @@ JINLINE void JIR_print(JIR inst) {
 	inst.operand[1].imm_u64,
 	inst.operand[1].imm_f32,
 	inst.operand[1].imm_f64,
-	inst.operand[1].procid,
 	inst.operand[1].offset,
 	inst.operand[1].jump,
 	inst.operand[1].label,
@@ -612,7 +595,6 @@ JINLINE void JIR_print(JIR inst) {
 	inst.operand[2].imm_u64,
 	inst.operand[2].imm_f32,
 	inst.operand[2].imm_f64,
-	inst.operand[2].procid,
 	inst.operand[2].offset,
 	inst.operand[2].jump,
 	inst.operand[2].label,
@@ -860,10 +842,10 @@ bool JIR_preprocess(JIRIMAGE *image) {
 }
 
 void JIR_exec(JIRIMAGE *image) {
-	u64 reg[32] = {0};
-	u64 reg_ptr[32] = {0};
-	float reg_f32[32] = {0};
-	double reg_f64[32] = {0};
+	u64 *reg = image->reg;
+	u64 *reg_ptr = image->reg_ptr;
+	float *reg_f32 = image->reg_f32;
+	double *reg_f64 = image->reg_f64;
 
 	JIRTYPE *port_types = image->port_types;
 	u64 *port = image->port;
@@ -917,8 +899,9 @@ void JIR_exec(JIRIMAGE *image) {
 	u64 pcstack[64] = {0};
 	u64 calldepth = 0;
 
-	u64 iocallval = 0;
-	char *iocallerror = NULL;
+	//u64 iocallval = 0;
+	//char *iocallerror = NULL;
+	s64 syscall_success = 0;
 	bool run = true;
 	bool issignedint = false;
 	u64 procid = 0;
@@ -1343,45 +1326,74 @@ void JIR_exec(JIRIMAGE *image) {
 			newpc = pcstack[calldepth];
 			proc = image->proctab[procid];
 			break;
-		case JIROP_IOREAD:
-			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] <= reg_ptr[inst.operand[1].r]) {
-				run = JIR_errortrace("ERROR: INVALID POINTER\n",
-					image->proctab, pc, procid, pcstack, procidstack, calldepth);
+		case JIROP_SYSCALL:
+			switch(iright) {
+#if defined(__linux__) || defined(__APPLE__)
+			/*
+			 * Linux syscalls
+			 *
+			 * 0	sys_read	unsigned int fd      char *buf	        size_t count
+			 * 1	sys_write	unsigned int fd      const char *buf	size_t count
+			 * 2	sys_open	const char *filename int flags          int mode
+			 * 3	sys_close	unsigned int fd
+			 */
+			case 0: // sys_read(unsigned int fd, char *buf, size_t count)
+				if(segsize[PTRTYPE_TO_SEGMENT(port_types[1])] <= port_ptr[1]) {
+					run = JIR_errortrace("ERROR: INVALID POINTER\n",
+							image->proctab, pc, procid, pcstack, procidstack, calldepth);
+				}
+				ptr = segtable[PTRTYPE_TO_SEGMENT(port_types[1])] + port_ptr[1];
+				syscall_success = port[0] = read(
+					(unsigned int)port[0],
+					(char*)ptr,
+					(size_t)port[2]);
+				port_types[0] = JIRTYPE_U64;
+				break;
+			case 1: // sys_write(unsigned int fd, const char *buf, size_t count)
+				if(segsize[PTRTYPE_TO_SEGMENT(port_types[1])] <= port_ptr[1]) {
+					run = JIR_errortrace("ERROR: INVALID POINTER\n",
+							image->proctab, pc, procid, pcstack, procidstack, calldepth);
+				}
+				ptr = segtable[PTRTYPE_TO_SEGMENT(port_types[1])] + port_ptr[1];
+				syscall_success = port[0] = write(
+					(unsigned int)port[0],
+					(char*)ptr,
+					(size_t)port[2]);
+				port_types[0] = JIRTYPE_U64;
+				break;
+			case 2: // sys_open(const char *filenamem, int flags, int mode)
+				if(segsize[PTRTYPE_TO_SEGMENT(port_types[0])] <= port_ptr[0]) {
+					run = JIR_errortrace("ERROR: INVALID POINTER\n",
+							image->proctab, pc, procid, pcstack, procidstack, calldepth);
+				}
+				ptr = segtable[PTRTYPE_TO_SEGMENT(port_types[0])] + port_ptr[0];
+				syscall_success = port[0] = open(
+					(char*)ptr,
+					(int)port[1],
+					(int)port[2]);
+				port_types[0] = JIRTYPE_S32;
+				break;
+			case 3: // sys_close(unsigned int fd)
+				syscall_success = close(
+					(unsigned int)port[0]);
+				break;
+#else
+			default:
+				UNREACHABLE; // syscalls not implemented for this OS
+#endif
 			}
-			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
-			iocallval = read((unsigned int)reg[inst.operand[0].r],(char*)ptr,(size_t)reg[inst.operand[2].r]);
-			iocallerror = "ERROR: IOREAD FAILED\n";
-			break;
-		case JIROP_IOWRITE:
-			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[1])] <= reg_ptr[inst.operand[1].r]) {
-				run = JIR_errortrace("ERROR: INVALID POINTER\n",
-					image->proctab, pc, procid, pcstack, procidstack, calldepth);
-			}
-			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[1])] + reg_ptr[inst.operand[1].r];
-			iocallval = write((unsigned int)reg[inst.operand[0].r],(void*)ptr,(size_t)reg[inst.operand[2].r]);
-			iocallerror = "ERROR: IOWRITE FAILED\n";
-			break;
-		case JIROP_IOOPEN:
-			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[0])] <= reg_ptr[inst.operand[0].r]) {
-				run = JIR_errortrace("ERROR: INVALID POINTER\n",
-					image->proctab, pc, procid, pcstack, procidstack, calldepth);
-			}
-			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[0])] + reg_ptr[inst.operand[0].r];
-			iocallval = open((char*)ptr,(int)reg[inst.operand[1].r]);
-			iocallerror = "ERROR: IOOPEN FAILED\n";
-			break;
-		case JIROP_IOCLOSE:
-			iocallval = close((unsigned int)reg[inst.operand[0].r]);
-			iocallerror = "ERROR: IOCLOSE FAILED\n";
 			break;
 		case JIROP_HALT:
 			run = false;
 			break;
 		}
 
-		if(iocallval == -1) {
-			run = JIR_errortrace(iocallerror, image->proctab, pc, procid, pcstack, procidstack, calldepth);
+		if(syscall_success == -1) {
+			run = JIR_errortrace("ERROR: SYSCALL FAILED\n", image->proctab, pc, procid, pcstack, procidstack, calldepth);
 		}
+		//if(iocallval == -1) {
+		//	run = JIR_errortrace(iocallerror, image->proctab, pc, procid, pcstack, procidstack, calldepth);
+		//}
 	}
 
 	image->local_pos = local_pos;
@@ -1403,6 +1415,10 @@ JINLINE void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs) {
 	i->localbase = calloc(0x80, sizeof(u64));
 	i->localbase_pos = 0;
 	i->local_pos = 0;
+	i->reg = malloc(64 * sizeof(u64));
+	i->reg_ptr = malloc(64 * sizeof(u64));
+	i->reg_f32 = malloc(64 * sizeof(f32));
+	i->reg_f64 = malloc(64 * sizeof(f64));
 	i->port_types = malloc(64 * sizeof(JIRTYPE));
 	i->port = malloc(64 * sizeof(u64));
 	i->port_ptr = malloc(64 * sizeof(u64));
@@ -1415,6 +1431,10 @@ JINLINE void JIRIMAGE_destroy(JIRIMAGE *i) {
 	free(i->global);
 	free(i->heap);
 	free(i->localbase);
+	free(i->reg);
+	free(i->reg_ptr);
+	free(i->reg_f32);
+	free(i->reg_f64);
 	free(i->port_types);
 	free(i->port);
 	free(i->port_ptr);
