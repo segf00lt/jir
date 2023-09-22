@@ -17,6 +17,7 @@
 #define Dict(V) struct { char *key; V value; } *
 #define UNREACHABLE assert(0)
 #define JINLINE __attribute__((always_inline)) inline
+#define STATICARRFOR(arr) for(size_t arr##_index = 0; arr##_index < STATICARRLEN(arr); ++arr##_index)
 
 typedef int64_t s64;
 typedef uint64_t u64;

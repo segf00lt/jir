@@ -33,6 +33,7 @@ void JIRIMAGE_init(JIRIMAGE *i, JIR **proctab, u64 nprocs);
 #define OPERAND(field, data) (JIROPERAND){ .field = data }
 #define PORT(index) (JIROPERAND){ .r = index }
 #define REG(index) (JIROPERAND){ .r = index }
+#define PROCID(data) (JIROPERAND){ .imm_u64 = (data) }
 #define IMMU64(data) (JIROPERAND){ .imm_u64 = (data) }
 #define IMMS64(data) (JIROPERAND){ .imm_u64 = (data) }
 #define IMMU32(data) (JIROPERAND){ .imm_u64 = (data & 0xffffffff) }
