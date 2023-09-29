@@ -1,7 +1,10 @@
 #include <stdio.h>
+#include <string.h>
 #include "basic.h"
 #define JIR_IMPL
 #include "jir.h"
+#define STB_DS_IMPLEMENTATION
+#include "stb_ds.h"
 
 typedef struct {
 	bool status;
@@ -32,11 +35,10 @@ Test_result test_casts() {
 		CASTOP(TYPECAST,F32,F64,REG(5),REG(5)),
 		HALTOP,
 	};
-	JIR *proctab[8] = { instarr };
+
 	JIRIMAGE image;
-	u64 nprocs = 1;
-	JIRIMAGE_init(&image, proctab, nprocs);
-	JIR_maplabels(proctab, nprocs);
+	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
+	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 
@@ -80,11 +82,10 @@ Test_result test_binary_and_unaryops() {
 		//DUMPREGOP(F32, REG(3)),
 		HALTOP,
 	};
-	JIR *proctab[8] = { instarr };
+
 	JIRIMAGE image;
-	u64 nprocs = 1;
-	JIRIMAGE_init(&image, proctab, nprocs);
-	JIR_maplabels(proctab, nprocs);
+	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
+	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 
@@ -118,13 +119,12 @@ Test_result test_io() {
 		//DUMPMEMOP(PTR_GLOBAL, true, true, IMMU64(0), IMMU64(14)),
 		HALTOP,
 	};
-	JIR *proctab[8] = { instarr };
+
 	JIRIMAGE image;
-	u64 nprocs = 1;
-	JIRIMAGE_init(&image, proctab, nprocs);
+	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
 	strcpy((char*)image.global, "Hello, World!\n");
 	strcpy((char*)image.global+128, "iotest");
-	JIR_maplabels(proctab, nprocs);
+	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 	JIRIMAGE_destroy(&image);
@@ -132,10 +132,13 @@ Test_result test_io() {
 	fseek(fp, 0L, SEEK_END);
 	size_t sz = ftell(fp);
 	fseek(fp, 0L, SEEK_SET);
-	char *message = malloc(sz);
+	char *message = malloc(sz+1);
+	message[sz] = 0;
 	fread(message, 1, sz, fp);
 	assert(!remove("iotest"));
 	bool status = !strcmp(message, "Hello, World!\n");
+	free(message);
+	fclose(fp);
 	return TEST_RESULT(status);
 }
 
@@ -151,11 +154,10 @@ Test_result test_float_ops() {
 		//DUMPREGOP(F64, REG(2)),
 		HALTOP,
 	};
-	JIR *proctab[8] = { instarr };
+
 	JIRIMAGE image;
-	u64 nprocs = 1;
-	JIRIMAGE_init(&image, proctab, nprocs);
-	JIR_maplabels(proctab, nprocs);
+	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
+	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 
@@ -178,11 +180,10 @@ Test_result test_integer_comparisons() {
 		//DUMPREGOP(U64, REG(3)),
 		HALTOP,
 	};
-	JIR *proctab[8] = { instarr };
+
 	JIRIMAGE image;
-	u64 nprocs = 1;
-	JIRIMAGE_init(&image, proctab, nprocs);
-	JIR_maplabels(proctab, nprocs);
+	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
+	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 	u64 *reg = image.reg;
@@ -192,22 +193,21 @@ Test_result test_integer_comparisons() {
 }
 
 Test_result test_procedure_calls() {
-	JIR proc0[] = {
+	JIR instarr[] = {
+		DEFPROCLABEL(LABEL("proc0")),
 		MOVEOPIMM(S64, REG(1), IMMU64(22)),
 		SETARGOP(S64,PORT(0),REG(1)),
 		//DEBUGMSGOP("dumping port in proc0"),
 		//DUMPPORTOP(S64,PORT(1)),
-		CALLOP(PROCID(1)),
+		CALLOP(LABEL("proc1")),
 		GETRETOP(U64,REG(1),PORT(0)),
 		SETRETOP(U64,PORT(0),REG(1)),
-		HALTOP,
-	};
-	JIR proc1[] = {
-		BFRAMEOP,
+		RETOP,
+		DEFPROCLABEL(LABEL("proc1")),
 		GETARGOP(S64,REG(1),PORT(0)),
 		BINOPIMM(MOD,U64,REG(2),REG(1),IMMU64(11)),
 		//DUMPREGOP(U64,REG(2)),
-		ALLOCOP(S64,REG(3)),
+		DEFLOCAL(S64,REG(3)),
 		STOROP(PTR_LOCAL,S64,REG(3),REG(2)),
 		BRANCHOP(REG(2), LABEL("is_multiple_of_2")),
 		MOVEOPIMM(U64, REG(1), IMMU64(12)),
@@ -215,18 +215,15 @@ Test_result test_procedure_calls() {
 		DEFLABEL(LABEL("is_multiple_of_2")),
 		//DUMPREGOP(U64,REG(1)),
 		//DUMPPORTOP(U64,PORT(0)),
-		CALLOP(PROCID(2)),
+		CALLOP(LABEL("proc2")),
 		GETRETOP(U64,REG(4),PORT(0)),
 		LOADOP(S64,PTR_LOCAL,REG(2),REG(3)),
 		//DUMPREGOP(U64,REG(2)),
 		SETRETOP(U64,PORT(0),REG(4)),
-		EFRAMEOP,
 		DEFLABEL(LABEL("proc1_return")),
 		DEFLABEL(LABEL("unreachable_instruction")),
 		RETOP,
-		HALTOP,
-	};
-	JIR proc2[] = {
+		DEFPROCLABEL(LABEL("proc2")),
 		GETARGOP(U64,REG(1),PORT(0)),
 		//DUMPPORTOP(U64,PORT(1)),
 		BINOPIMM(MUL,U64,REG(2),REG(1),IMMU64(10)),
@@ -239,10 +236,9 @@ Test_result test_procedure_calls() {
 		RETOP,
 		HALTOP,
 	};
-	JIR *proctab[8] = {proc0,proc1,proc2};
+
 	JIRIMAGE image;
-	u64 nprocs = 3;
-	JIRIMAGE_init(&image, proctab, nprocs);
+	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 	bool status = (image.port[0] == 0x2);
@@ -262,11 +258,10 @@ Test_result test_heap() {
 		//DUMPMEMOP(PTR_HEAP, false, true, REG(2), IMMU64(0xfed+100)),
 		HALTOP,
 	};
-	JIR *proctab[8] = {instarr};
+
 	JIRIMAGE image;
-	u64 nprocs = 1;
-	JIRIMAGE_init(&image, proctab, nprocs);
-	JIR_maplabels(proctab, nprocs);
+	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
+	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 	bool status = (*(u16*)(image.heap+0xfed) == (u16)0xc);
