@@ -38,7 +38,6 @@ Test_result test_casts() {
 
 	JIRIMAGE image;
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
-	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 
@@ -85,7 +84,6 @@ Test_result test_binary_and_unaryops() {
 
 	JIRIMAGE image;
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
-	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 
@@ -124,7 +122,6 @@ Test_result test_io() {
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
 	strcpy((char*)image.global, "Hello, World!\n");
 	strcpy((char*)image.global+128, "iotest");
-	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 	JIRIMAGE_destroy(&image);
@@ -157,7 +154,6 @@ Test_result test_float_ops() {
 
 	JIRIMAGE image;
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
-	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 
@@ -183,7 +179,6 @@ Test_result test_integer_comparisons() {
 
 	JIRIMAGE image;
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
-	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 	u64 *reg = image.reg;
@@ -192,6 +187,8 @@ Test_result test_integer_comparisons() {
 	return TEST_RESULT(status);
 }
 
+// TODO
+// add a way to set global data
 Test_result test_procedure_calls() {
 	JIR instarr[] = {
 		DEFPROCLABEL(LABEL("proc0")),
@@ -207,7 +204,7 @@ Test_result test_procedure_calls() {
 		GETARGOP(S64,REG(1),PORT(0)),
 		BINOPIMM(MOD,U64,REG(2),REG(1),IMMU64(11)),
 		//DUMPREGOP(U64,REG(2)),
-		DEFLOCAL(S64,REG(3)),
+		LOCALOP(S64,REG(3)),
 		STOROP(PTR_LOCAL,S64,REG(3),REG(2)),
 		BRANCHOP(REG(2), LABEL("is_multiple_of_2")),
 		MOVEOPIMM(U64, REG(1), IMMU64(12)),
@@ -261,11 +258,29 @@ Test_result test_heap() {
 
 	JIRIMAGE image;
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
-	JIR_maplabels(instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 	bool status = (*(u16*)(image.heap+0xfed) == (u16)0xc);
 	JIRIMAGE_destroy(&image);
+	return TEST_RESULT(status);
+}
+
+Test_result test_globals() {
+	JIR instarr[] = {
+		DEFGLOBAL(LABEL("test_global_var_1"), F32, IMMF32(42.1309)),
+		DEFGLOBAL(LABEL("test_global_var_2"), F32, IMMF32(0.0)),
+		LOADOP(F32, PTR_GLOBAL, REG(0), LABEL("test_global_var_1")),
+		BINOPIMM(FDIV, F32, REG(1), REG(0), IMMF32(2.0)),
+		STOROP(PTR_GLOBAL, F32, LABEL("test_global_var_2"), REG(1)),
+		HALTOP,
+	};
+	JIRIMAGE image;
+	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
+	if(JIR_preprocess(&image))
+		JIR_exec(&image);
+	float test_global_var_1 = 42.1309;
+	float test_global_var_2 = 42.1309 / 2.0;
+	bool status = (image.reg_f32[0] == test_global_var_1 && ((float*)image.global)[1] == test_global_var_2);
 	return TEST_RESULT(status);
 }
 
