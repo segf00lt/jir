@@ -204,8 +204,8 @@ Test_result test_procedure_calls() {
 		GETARGOP(S64,REG(1),PORT(0)),
 		BINOPIMM(MOD,U64,REG(2),REG(1),IMMU64(11)),
 		//DUMPREGOP(U64,REG(2)),
-		LOCALOP(S64,REG(3)),
-		STOROP(PTR_LOCAL,S64,REG(3),REG(2)),
+		DEFLOCAL(S64,REG(3)),
+		STOROPIND(PTR_LOCAL,S64,REG(3),REG(2)),
 		BRANCHOP(REG(2), LABEL("is_multiple_of_2")),
 		MOVEOPIMM(U64, REG(1), IMMU64(12)),
 		SETARGOP(U64,PORT(0),REG(1)),
@@ -214,7 +214,7 @@ Test_result test_procedure_calls() {
 		//DUMPPORTOP(U64,PORT(0)),
 		CALLOP(LABEL("proc2")),
 		GETRETOP(U64,REG(4),PORT(0)),
-		LOADOP(S64,PTR_LOCAL,REG(2),REG(3)),
+		LOADOPIND(S64,PTR_LOCAL,REG(2),REG(3)),
 		//DUMPREGOP(U64,REG(2)),
 		SETRETOP(U64,PORT(0),REG(4)),
 		DEFLABEL(LABEL("proc1_return")),
@@ -247,8 +247,8 @@ Test_result test_heap() {
 	JIR instarr[] = {
 		MOVEOPIMM(U16, REG(1), IMMU64(0xc)),
 		MOVEOPIMM(PTR_HEAP, REG(2), PTR(0xfed)),
-		STOROP(PTR_HEAP, U16, REG(2), REG(1)),
-		LOADOP(U16, PTR_HEAP, REG(3), REG(2)),
+		STOROPIND(PTR_HEAP, U16, REG(2), REG(1)),
+		LOADOPIND(U16, PTR_HEAP, REG(3), REG(2)),
 		//DUMPREGOP(U16, REG(3)),
 		//DUMPMEMOP(PTR_HEAP, false, true, REG(2), IMMU64(0xfed+18)),
 		GROWHEAPOP(IMMU64(2)),
@@ -280,7 +280,8 @@ Test_result test_globals() {
 		JIR_exec(&image);
 	float test_global_var_1 = 42.1309;
 	float test_global_var_2 = 42.1309 / 2.0;
-	bool status = (image.reg_f32[0] == test_global_var_1 && ((float*)image.global)[1] == test_global_var_2);
+	bool status = (image.reg_f32[0] == test_global_var_1 && *(float*)(image.global+sizeof(float)) == test_global_var_2);
+	JIRIMAGE_destroy(&image);
 	return TEST_RESULT(status);
 }
 
@@ -293,6 +294,7 @@ int main(int argc, char **argv) {
 		test_integer_comparisons,
 		test_procedure_calls,
 		test_heap,
+		test_globals,
 	};
 
 	STATICARRFOR(tests)

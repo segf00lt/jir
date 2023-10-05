@@ -25,7 +25,7 @@
 
 typedef struct JIR JIR;
 typedef struct JIRIMAGE JIRIMAGE;
-typedef union JIROPERAND JIROPERAND;
+typedef struct JIROPERAND JIROPERAND;
 
 void JIR_print(JIR inst);
 bool JIR_errortrace(char *msg, JIR *prog, u64 pc, char *proclabel, u64 *pcstack, char **proclabelstack, u64 calldepth);
@@ -51,6 +51,7 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 #define IMMF64(data) (JIROPERAND){ .imm_f64 = (data) }
 #define PTR(data) (JIROPERAND){ .offset = (data) }
 #define LABEL(l) (JIROPERAND){ .label = (l) }
+#define EXTERNALDATA(ptr) (JIROPERAND){ .external_data = (ptr) }
 
 #define DUMPMEMOP(t, imm_start, imm_end, start, end)\
 	(JIR){\
@@ -174,11 +175,33 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 		.operand[0] = dest,\
 		.operand[1] = {0},\
 		.operand[2] = src,\
-		.immediate = { false, false, false },\
+		.immediate = { false, false, true },\
 		.debugmsg = NULL,\
 	}
 
 #define STOROP(t_dest, t_src, dest, src)\
+	(JIR){\
+		.opcode = JIROP_STOR,\
+		.type = { JIRTYPE_##t_src, 0, JIRTYPE_##t_dest, },\
+		.operand[0] = src,\
+		.operand[1] = {0},\
+		.operand[2] = dest,\
+		.immediate = { false, false, true },\
+		.debugmsg = NULL,\
+	}
+
+#define LOADOPIND(t_dest, t_src, dest, src)\
+	(JIR){\
+		.opcode = JIROP_LOAD,\
+		.type = { JIRTYPE_##t_dest, 0, JIRTYPE_##t_src },\
+		.operand[0] = dest,\
+		.operand[1] = {0},\
+		.operand[2] = src,\
+		.immediate = { false, false, false },\
+		.debugmsg = NULL,\
+	}
+
+#define STOROPIND(t_dest, t_src, dest, src)\
 	(JIR){\
 		.opcode = JIROP_STOR,\
 		.type = { JIRTYPE_##t_src, 0, JIRTYPE_##t_dest, },\
@@ -212,7 +235,7 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#define LOCALOP(t, dest)\
+#define DEFLOCAL(t, dest)\
 	(JIR){\
 		.opcode = JIROP_LOCAL,\
 		.type = { JIRTYPE_PTR_LOCAL, JIRTYPE_##t, 0 },\
@@ -223,7 +246,7 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#define LOCALOPIMM(size, dest)\
+#define DEFLOCALBYTES(size, dest)\
 	(JIR){\
 		.opcode = JIROP_LOCAL,\
 		.type = { JIRTYPE_PTR_LOCAL, JIRTYPE_U64,0 },\
@@ -245,14 +268,36 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#define DEFGLOBALZEROS(label, bytes)\
+#define DEFGLOBALZERO(label, t)\
 	(JIR){\
 		.opcode = JIROP_GLOBAL,\
+		.type = { 0, 0, JIRTYPE_##t },\
+		.operand[0] = label,\
+		.operand[1] = {0},\
+		.operand[2] = {0},\
+		.immediate = {0},\
+		.debugmsg = NULL,\
+	}
+
+#define DEFGLOBALBYTES(label, bytes, dataptr)\
+	(JIR){\
+		.opcode = JIROP_GLOBALBYTES,\
+		.type = { 0, JIRTYPE_U64, 0 },\
+		.operand[0] = label,\
+		.operand[1] = bytes,\
+		.operand[2] = dataptr,\
+		.immediate = {0},\
+		.debugmsg = NULL,\
+	}
+
+#define DEFGLOBALBYTESZERO(label, bytes)\
+	(JIR){\
+		.opcode = JIROP_GLOBALBYTES,\
 		.type = { 0, JIRTYPE_U64, 0 },\
 		.operand[0] = label,\
 		.operand[1] = bytes,\
 		.operand[2] = {0},\
-		.immediate = { false, true, false },\
+		.immediate = {0},\
 		.debugmsg = NULL,\
 	}
 
@@ -267,7 +312,7 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#define GROWHEAPOPINDIRECT(factor)\
+#define GROWHEAPOPIND(factor)\
 	(JIR){\
 		.opcode = JIROP_GROWHEAP,\
 		.type = { 0, 0, JIRTYPE_U64 },\
@@ -301,7 +346,7 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 	}
 
 // TODO fix direct and indirect calls
-#define CALLOPINDIRECT(proclabel)\
+#define CALLOPIND(proclabel)\
 	(JIR){\
 		.opcode = JIROP_CALL,\
 		.type = {0},\
@@ -312,7 +357,7 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#define SYSCALLOPINDIRECT(proclabel)\
+#define SYSCALLOPIND(proclabel)\
 	(JIR){\
 		.opcode = JIROP_SYSCALL,\
 		.type = {0},\
@@ -451,6 +496,7 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 	X(MOVE)       \
 	X(LOCAL)      \
 	X(GLOBAL)     \
+	X(GLOBALBYTES)\
 	X(PROCLABEL)  \
 	X(CALL)       \
 	X(RET)        \
@@ -575,18 +621,17 @@ const char *segmentsdebug[] = {
 #undef X
 };
 
-union JIROPERAND {
+struct JIROPERAND {
 	int r;
 	u64 imm_u64;
 	float imm_f32;
 	double imm_f64;
-	struct {
-		union {
-			s64 jump;
-			u64 offset;
-		};
-		const char *label;
+	union {
+		s64 jump;
+		u64 offset;
 	};
+	const char *label;
+	void *external_data;
 };
 
 struct JIR {
@@ -758,7 +803,10 @@ bool JIR_preprocess(JIRIMAGE *image) {
 	for(u64 pc = 0; pc < proglen && prog[pc].opcode != JIROP_HALT; ++pc) {
 		JIR inst = prog[pc];
 
-		if(inst.opcode != JIROP_LABEL && inst.opcode != JIROP_PROCLABEL && inst.opcode != JIROP_GLOBAL)
+		if(inst.opcode != JIROP_LABEL && \
+           inst.opcode != JIROP_PROCLABEL && \
+           inst.opcode != JIROP_GLOBAL && \
+		   inst.opcode != JIROP_GLOBALBYTES)
 			continue;
 
 		const char *label = inst.operand[0].label;
@@ -781,35 +829,46 @@ bool JIR_preprocess(JIRIMAGE *image) {
 			case JIROP_LABEL:
 				shput(positions, label, (pc+1));
 				break;
+			case JIROP_GLOBALBYTES:
+				shput(positions, label, globalpos);
+				if(inst.operand[2].external_data == NULL)
+					memset(global+globalpos, 0, inst.operand[1].imm_u64);
+				else
+					memcpy(global+globalpos, inst.operand[2].external_data, inst.operand[1].imm_u64);
+				globalpos += inst.operand[1].imm_u64;
+				if(globalpos >= image->globalsize) {
+					printf("JIR PREPROCESS:\nINSTRUCTION %lu:\n", pc);
+					JIR_print(inst);
+					printf("ERROR: TOO MANY GLOBAL VARIABLES, PLEASE ALLOCATE A BIGGER GLOBAL SEGMENT\n");
+					shfree(opcodes);
+					shfree(positions);
+					return false;
+				}
+				break;
 			case JIROP_GLOBAL:
 				shput(positions, label, globalpos);
-				if(inst.immediate[1]) {
-					memset(global+globalpos, 0, inst.operand[1].imm_u64);
-					globalpos += inst.operand[1].imm_u64;
+				if(inst.type[2] == JIRTYPE_F64) {
+					*(double*)(global+globalpos) = inst.operand[2].imm_f64;
+				} else if(inst.type[2] == JIRTYPE_F32) {
+					*(float*)(global+globalpos) = inst.operand[2].imm_f32;
+				} else if(inst.type[2] >= JIRTYPE_PTR_LOCAL && inst.type[2] <= JIRTYPE_PTR_HEAP) {
+					printf("JIR PREPROCESS:\nINSTRUCTION %lu:\n", pc);
+					JIR_print(inst);
+					printf("ERROR: ILLEGAL TO DEFINE GLOBAL POINTER DATA\n");
+					shfree(opcodes);
+					shfree(positions);
+					return false;
 				} else {
-					if(inst.type[2] == JIRTYPE_F64) {
-						*(double*)(global+globalpos) = inst.operand[2].imm_f64;
-					} else if(inst.type[2] == JIRTYPE_F32) {
-						*(float*)(global+globalpos) = inst.operand[2].imm_f32;
-					} else if(inst.type[2] >= JIRTYPE_PTR_LOCAL && inst.type[2] <= JIRTYPE_PTR_HEAP) {
-						printf("JIR PREPROCESS:\nINSTRUCTION %lu:\n", pc);
-						JIR_print(inst);
-						printf("ERROR: ILLEGAL TO DEFINE GLOBAL POINTER DATA\n");
-						shfree(opcodes);
-						shfree(positions);
-						return false;
-					} else {
-						*(u64*)(global+globalpos) = inst.operand[2].imm_u64 & TYPE_MASKS[inst.type[2]];
-					}
-					globalpos += TYPE_SIZES[inst.type[2]];
-					if(globalpos >= image->globalsize) {
-						printf("JIR PREPROCESS:\nINSTRUCTION %lu:\n", pc);
-						JIR_print(inst);
-						printf("ERROR: TOO MANY GLOBAL VARIABLES, PLEASE ALLOCATE A BIGGER GLOBAL SEGMENT\n");
-						shfree(opcodes);
-						shfree(positions);
-						return false;
-					}
+					*(u64*)(global+globalpos) = inst.operand[2].imm_u64 & TYPE_MASKS[inst.type[2]];
+				}
+				globalpos += TYPE_SIZES[inst.type[2]];
+				if(globalpos >= image->globalsize) {
+					printf("JIR PREPROCESS:\nINSTRUCTION %lu:\n", pc);
+					JIR_print(inst);
+					printf("ERROR: TOO MANY GLOBAL VARIABLES, PLEASE ALLOCATE A BIGGER GLOBAL SEGMENT\n");
+					shfree(opcodes);
+					shfree(positions);
+					return false;
 				}
 				break;
 		}
@@ -822,8 +881,8 @@ bool JIR_preprocess(JIRIMAGE *image) {
 		if(inst.opcode != JIROP_BRANCH && \
 		   inst.opcode != JIROP_CALL && \
 		   inst.opcode != JIROP_JMP && \
-		   !(inst.opcode == JIROP_STOR && inst.type[0] == JIRTYPE_PTR_GLOBAL && inst.operand[0].label) && \
-		   !(inst.opcode == JIROP_LOAD && inst.type[1] == JIRTYPE_PTR_GLOBAL && inst.operand[1].label))
+		   !(inst.opcode == JIROP_STOR && inst.type[2] == JIRTYPE_PTR_GLOBAL && inst.operand[2].label) && \
+		   !(inst.opcode == JIROP_LOAD && inst.type[2] == JIRTYPE_PTR_GLOBAL && inst.operand[2].label))
 			continue;
 
 		const char *label = inst.operand[2].label;
@@ -841,9 +900,9 @@ bool JIR_preprocess(JIRIMAGE *image) {
 		if(inst.opcode == JIROP_BRANCH || inst.opcode == JIROP_CALL || inst.opcode == JIROP_JMP)
 			prog[pc].operand[2].jump = (positions[i].value > pc) ? (s64)(positions[i].value - pc) : (s64)(-pc + positions[i].value);
 		else if(inst.opcode == JIROP_STOR)
-			prog[pc].operand[0].offset = positions[i].value;
+			prog[pc].operand[2].offset = positions[i].value;
 		else if(inst.opcode == JIROP_LOAD)
-			prog[pc].operand[1].offset = positions[i].value;
+			prog[pc].operand[2].offset = positions[i].value;
 		else
 			UNREACHABLE;
 	}
@@ -886,8 +945,6 @@ void JIR_exec(JIRIMAGE *image) {
 	u64 pcstack[64] = {0};
 	u64 calldepth = 0;
 
-	//u64 iocallval = 0;
-	//char *iocallerror = NULL;
 	s64 syscall_success = 0;
 	bool run = true;
 	bool issignedint = false;
@@ -1133,11 +1190,19 @@ void JIR_exec(JIRIMAGE *image) {
 			}
 			break;
 		case JIROP_LOAD:
-			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[2])] <= reg_ptr[inst.operand[2].r]) {
-				run = JIR_errortrace("ERROR: INVALID POINTER\n",
-					image->prog, pc, proclabel, pcstack, proclabelstack, calldepth);
+			if(inst.immediate[2]) {
+				if(segsize[PTRTYPE_TO_SEGMENT(inst.type[2])] <= inst.operand[2].offset) {
+					run = JIR_errortrace("ERROR: INVALID POINTER\n",
+							image->prog, pc, proclabel, pcstack, proclabelstack, calldepth);
+				}
+				ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[2])] + inst.operand[2].offset;
+			} else {
+				if(segsize[PTRTYPE_TO_SEGMENT(inst.type[2])] <= reg_ptr[inst.operand[2].r]) {
+					run = JIR_errortrace("ERROR: INVALID POINTER\n",
+							image->prog, pc, proclabel, pcstack, proclabelstack, calldepth);
+				}
+				ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[2])] + reg_ptr[inst.operand[2].r];
 			}
-			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[2])] + reg_ptr[inst.operand[2].r];
 			if(inst.type[0] == JIRTYPE_F32) {
 				reg_f32[inst.operand[0].r] = *(float*)(ptr);
 			} else if(inst.type[0] == JIRTYPE_F64) {
@@ -1150,11 +1215,19 @@ void JIR_exec(JIRIMAGE *image) {
 			}
 			break;
 		case JIROP_STOR:
-			if(segsize[PTRTYPE_TO_SEGMENT(inst.type[2])] <= reg_ptr[inst.operand[2].r]) {
-				run = JIR_errortrace("ERROR: INVALID POINTER\n",
-					image->prog, pc, proclabel, pcstack, proclabelstack, calldepth);
+			if(inst.immediate[2]) {
+				if(segsize[PTRTYPE_TO_SEGMENT(inst.type[2])] <= inst.operand[2].offset) {
+					run = JIR_errortrace("ERROR: INVALID POINTER\n",
+							image->prog, pc, proclabel, pcstack, proclabelstack, calldepth);
+				}
+				ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[2])] + inst.operand[2].offset;
+			} else {
+				if(segsize[PTRTYPE_TO_SEGMENT(inst.type[2])] <= reg_ptr[inst.operand[2].r]) {
+					run = JIR_errortrace("ERROR: INVALID POINTER\n",
+							image->prog, pc, proclabel, pcstack, proclabelstack, calldepth);
+				}
+				ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[2])] + reg_ptr[inst.operand[2].r];
 			}
-			ptr = segtable[PTRTYPE_TO_SEGMENT(inst.type[2])] + reg_ptr[inst.operand[2].r];
 			if(inst.type[0] == JIRTYPE_F32) {
 				*(float*)(ptr) = reg_f32[inst.operand[0].r];
 			} else if(inst.type[0] == JIRTYPE_F64) {
