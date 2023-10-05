@@ -235,9 +235,9 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#define DEFLOCAL(t, dest)\
+#define ALLOCOP(t, dest)\
 	(JIR){\
-		.opcode = JIROP_LOCAL,\
+		.opcode = JIROP_ALLOC,\
 		.type = { JIRTYPE_PTR_LOCAL, JIRTYPE_##t, 0 },\
 		.operand[0] = dest,\
 		.operand[1] = {0},\
@@ -246,13 +246,13 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#define DEFLOCALBYTES(size, dest)\
+#define ALLOCOPBYTES(bytes, dest)\
 	(JIR){\
-		.opcode = JIROP_LOCAL,\
-		.type = { JIRTYPE_PTR_LOCAL, JIRTYPE_U64,0 },\
+		.opcode = JIROP_ALLOC,\
+		.type = { JIRTYPE_PTR_LOCAL, 0, JIRTYPE_U64 },\
 		.operand[0] = dest,\
 		.operand[1] = {0},\
-		.operand[2] = size,\
+		.operand[2] = bytes,\
 		.immediate = { false, false, true },\
 		.debugmsg = NULL,\
 	}
@@ -334,36 +334,35 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 		.debugmsg = NULL,\
 	}
 
-#define SYSCALLOP(proclabel)\
+#define SYSCALLOP(syscallid)\
 	(JIR){\
 		.opcode = JIROP_SYSCALL,\
 		.type = {0},\
 		.operand[0] = {0},\
 		.operand[1] = {0},\
-		.operand[2] = proclabel,\
+		.operand[2] = syscallid,\
 		.immediate = { false, false, true },\
 		.debugmsg = NULL,\
 	}
 
-// TODO fix direct and indirect calls
-#define CALLOPIND(proclabel)\
+#define CALLOPIND(procreg)\
 	(JIR){\
 		.opcode = JIROP_CALL,\
 		.type = {0},\
-		.operand[0] = proclabel,\
+		.operand[0] = {0},\
 		.operand[1] = {0},\
-		.operand[2] = {0},\
+		.operand[2] = procreg,\
 		.immediate = {0},\
 		.debugmsg = NULL,\
 	}
 
-#define SYSCALLOPIND(proclabel)\
+#define SYSCALLOPIND(syscallreg)\
 	(JIR){\
 		.opcode = JIROP_SYSCALL,\
 		.type = {0},\
-		.operand[0] = proclabel,\
+		.operand[0] = {0},\
 		.operand[1] = {0},\
-		.operand[2] = {0},\
+		.operand[2] = syscallreg,\
 		.immediate = {0},\
 		.debugmsg = NULL,\
 	}
@@ -494,7 +493,7 @@ void JIR_translate_c(char **Cbuf, u64 *Cbuflen, JIR **proctab, u64 nprocs);
 	X(LOAD)       \
 	X(STOR)       \
 	X(MOVE)       \
-	X(LOCAL)      \
+	X(ALLOC)      \
 	X(GLOBAL)     \
 	X(GLOBALBYTES)\
 	X(PROCLABEL)  \
@@ -1238,7 +1237,7 @@ void JIR_exec(JIRIMAGE *image) {
 				*(u64*)(ptr) |= reg[inst.operand[0].r] & imask;
 			}
 			break;
-		case JIROP_LOCAL:
+		case JIROP_ALLOC:
 			if(inst.type[0] != JIRTYPE_PTR_LOCAL) {
 				run = JIR_errortrace("ERROR: INVALID POINTER TYPE TO LOCAL\n",
 					image->prog, pc, proclabel, pcstack, proclabelstack, calldepth);
@@ -1362,7 +1361,10 @@ void JIR_exec(JIRIMAGE *image) {
 			proclabelstack[calldepth] = proclabel;
 			pcstack[calldepth] = newpc; // store newpc so we return to the next inst
 			++calldepth;
-			newpc = pc + inst.operand[2].jump;
+			if(!inst.immediate[2])
+				newpc = pc + reg[inst.operand[2].r];
+			else
+				newpc = pc + inst.operand[2].jump;
 			localbase[localbase_pos++] = local_pos;
 			if(localbase_pos >= localbasesize) {
 				run = JIR_errortrace("ERROR: LOCAL BASE OVERFLOW\n",
