@@ -22,18 +22,19 @@ void test_run(Test t) {
 Test_result test_casts() {
 	bool status = false;
 	JIR instarr[] = {
-		MOVEOPIMM(F32, REG(2), IMMF32(112.4367)),
-		CASTOP(BITCAST,U64,F32,REG(1),REG(2)),
+		DEFPROCLABEL(LABEL("main")),
+		MOVEOPIMM(F32, FREG(2), IMMF32(112.4367)),
+		CASTOP(BITCAST,U64,F32,REG(1),FREG(2)),
 		MOVEOPIMM(U64,REG(0),IMMU64(0xffffffffff000000)),
-		CASTOP(BITCAST,F32,U64,REG(1),REG(0)),
-		MOVEOPIMM(F64,REG(0),IMMF64(0.55512316)),
-		CASTOP(BITCAST,F32,F64,REG(3),REG(0)),
-		CASTOP(BITCAST,U64,F64,REG(2),REG(0)),
-		MOVEOPIMM(F32,REG(4),IMMF32(200.613)),
-		CASTOP(TYPECAST,U32,F32,REG(4),REG(4)),
-		MOVEOPIMM(F64,REG(5),IMMF64(1992931.234)),
-		CASTOP(TYPECAST,F32,F64,REG(5),REG(5)),
-		HALTOP,
+		CASTOP(BITCAST,F32,U64,FREG(1),REG(0)),
+		MOVEOPIMM(F64,FREG(0),IMMF64(0.55512316)),
+		CASTOP(BITCAST,F32,F64,FREG(3),FREG(0)),
+		CASTOP(BITCAST,U64,F64,REG(2),FREG(0)),
+		MOVEOPIMM(F32,FREG(4),IMMF32(200.613)),
+		CASTOP(TYPECAST,U32,F32,REG(4),FREG(4)),
+		MOVEOPIMM(F64,FREG(5),IMMF64(1992931.234)),
+		CASTOP(TYPECAST,F32,F64,FREG(5),FREG(5)),
+		RETOP,
 	};
 
 	JIRIMAGE image;
@@ -67,19 +68,16 @@ Test_result test_casts() {
 
 Test_result test_binary_and_unaryops() {
 	JIR instarr[] = {
+		DEFPROCLABEL(LABEL("main")),
 		MOVEOPIMM(S8, REG(0), IMMU64(1)),
 		UNOP(NEG,S8,REG(1),REG(0)),
 		UNOP(NOT,U16,REG(1),REG(1)),
-		//DUMPREGOP(S8, REG(1)),
-		//DUMPREGOP(U16, REG(1)),
-		MOVEOPIMM(F32,REG(1),IMMF32(35.412)),
-		UNOP(FNEG,F32,REG(2),REG(1)),
+		MOVEOPIMM(F32,FREG(1),IMMF32(35.412)),
+		UNOP(FNEG,F32,FREG(2),FREG(1)),
 		BINOP(FSUB,F32,REG(2),REG(2),REG(1)),
-		//DUMPREGOP(F32, REG(2)),
-		BINOPIMM(FMUL,F32,REG(3),REG(1),IMMF32(2.0)),
-		BINOP(FADD,F32,REG(3),REG(3),REG(2)),
-		//DUMPREGOP(F32, REG(3)),
-		HALTOP,
+		BINOPIMM(FMUL,F32,FREG(3),FREG(1),IMMF32(2.0)),
+		BINOP(FADD,F32,FREG(3),FREG(3),FREG(2)),
+		RETOP,
 	};
 
 	JIRIMAGE image;
@@ -102,27 +100,32 @@ Test_result test_binary_and_unaryops() {
 }
 
 Test_result test_io() {
+	char *message = "Hello, World!\n";
+	u64 message_len = strlen(message) + 1;
+	char *outfile = "iotest";
+	u64 outfile_len = strlen(outfile) + 1;
 	JIR instarr[] = {
-		SETARGOPIMM(PTR_GLOBAL, PORT(0), PTR(128)),
+		DEFPROCLABEL(LABEL("main")),
+		DEFGLOBALBYTES(LABEL("message"), IMMU64(message_len), EXTERNALDATA(message)),
+		DEFGLOBALBYTES(LABEL("outfile"), IMMU64(outfile_len), EXTERNALDATA(outfile)),
+		SETARGOPIMM(PTR_GLOBAL, PORT(0), LABEL("outfile")),
 		SETARGOPIMM(S32, PORT(1), IMMS32(O_WRONLY | O_CREAT)),
 		SETARGOPIMM(U64, PORT(2), IMMU64(00666)),
 		MOVEOPIMM(U64, REG(0), IMMU64(2)),
 		SYSCALLOPIND(REG(0)),
 		GETRETOP(S32, REG(0), PORT(0)),
 		SETARGOP(S32, PORT(0), REG(0)),
-		SETARGOPIMM(PTR_GLOBAL, PORT(1), PTR(0)),
+		SETARGOPIMM(PTR_GLOBAL, PORT(1), LABEL("message")),
 		SETARGOPIMM(U64, PORT(2), IMMU64(14)),
 		SYSCALLOP(IMMU64(1)),
 		SETARGOP(S32, PORT(0), REG(0)),
 		SYSCALLOP(IMMU64(3)),
 		//DUMPMEMOP(PTR_GLOBAL, true, true, IMMU64(0), IMMU64(14)),
-		HALTOP,
+		RETOP,
 	};
 
 	JIRIMAGE image;
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
-	strcpy((char*)image.global, "Hello, World!\n");
-	strcpy((char*)image.global+128, "iotest");
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 	JIRIMAGE_destroy(&image);
@@ -130,27 +133,24 @@ Test_result test_io() {
 	fseek(fp, 0L, SEEK_END);
 	size_t sz = ftell(fp);
 	fseek(fp, 0L, SEEK_SET);
-	char *message = malloc(sz+1);
-	message[sz] = 0;
-	fread(message, 1, sz, fp);
+	char *text = malloc(sz+1);
+	text[sz] = 0;
+	fread(text, 1, sz, fp);
 	assert(!remove("iotest"));
-	bool status = !strcmp(message, "Hello, World!\n");
-	free(message);
+	bool status = !strcmp(text, "Hello, World!\n");
+	free(text);
 	fclose(fp);
 	return TEST_RESULT(status);
 }
 
 Test_result test_float_ops() {
 	JIR instarr[] = {
-		MOVEOPIMM(F32, REG(1), IMMF32(1.333)),
-		BINOPIMM(FMUL, F32, REG(2), REG(1), IMMF32(7.1)),
-		//DUMPREGOP(F32, REG(1)),
-		//DUMPREGOP(F32, REG(2)),
-		MOVEOPIMM(F64, REG(1), IMMF64(1.333)),
-		BINOPIMM(FDIV, F64, REG(2), REG(1), IMMF64(7.1)),
-		//DUMPREGOP(F64, REG(1)),
-		//DUMPREGOP(F64, REG(2)),
-		HALTOP,
+		DEFPROCLABEL(LABEL("main")),
+		MOVEOPIMM(F32, FREG(1), IMMF32(1.333)),
+		BINOPIMM(FMUL, F32, FREG(2), FREG(1), IMMF32(7.1)),
+		MOVEOPIMM(F64, FREG(1), IMMF64(1.333)),
+		BINOPIMM(FDIV, F64, FREG(2), FREG(1), IMMF64(7.1)),
+		RETOP,
 	};
 
 	JIRIMAGE image;
@@ -171,11 +171,12 @@ Test_result test_float_ops() {
 
 Test_result test_integer_comparisons() {
 	JIR instarr[] = {
+		DEFPROCLABEL(LABEL("main")),
 		MOVEOPIMM(S8, REG(1), IMMU64(-12)),
 		MOVEOPIMM(S8, REG(2), IMMU64(5)),
 		BINOP(LE, S8, REG(3), REG(1), REG(2)),
 		//DUMPREGOP(U64, REG(3)),
-		HALTOP,
+		RETOP,
 	};
 
 	JIRIMAGE image;
@@ -188,11 +189,9 @@ Test_result test_integer_comparisons() {
 	return TEST_RESULT(status);
 }
 
-// TODO
-// add a way to set global data
 Test_result test_procedure_calls() {
 	JIR instarr[] = {
-		DEFPROCLABEL(LABEL("proc0")),
+		DEFPROCLABEL(LABEL("main")),
 		MOVEOPIMM(S64, REG(1), IMMU64(22)),
 		SETARGOP(S64,PORT(0),REG(1)),
 		//DEBUGMSGOP("dumping port in proc0"),
@@ -205,23 +204,25 @@ Test_result test_procedure_calls() {
 		GETARGOP(S64,REG(1),PORT(0)),
 		BINOPIMM(MOD,U64,REG(2),REG(1),IMMU64(11)),
 		//DUMPREGOP(U64,REG(2)),
-		ALLOCOP(S64,REG(3)),
-		STOROPIND(PTR_LOCAL,S64,REG(3),REG(2)),
+		ALLOCOP(S64,PTR(3)),
+		ALLOCOP(F32,PTR(8)),
+		STOROPIND(PTR_LOCAL,S64,PTR(3),REG(2)),
 		BRANCHOP(REG(2), LABEL("is_multiple_of_2")),
 		MOVEOPIMM(U64, REG(1), IMMU64(12)),
 		SETARGOP(U64,PORT(0),REG(1)),
-		DEFLABEL(LABEL("is_multiple_of_2")),
+		DEFJMPLABEL(LABEL("is_multiple_of_2")),
 		//DUMPREGOP(U64,REG(1)),
 		//DUMPPORTOP(U64,PORT(0)),
 		CALLOP(LABEL("proc2")),
 		GETRETOP(U64,REG(4),PORT(0)),
-		LOADOPIND(S64,PTR_LOCAL,REG(2),REG(3)),
+		LOADOPIND(S64,PTR_LOCAL,REG(2),PTR(3)),
 		//DUMPREGOP(U64,REG(2)),
 		SETRETOP(U64,PORT(0),REG(4)),
-		DEFLABEL(LABEL("proc1_return")),
-		DEFLABEL(LABEL("unreachable_instruction")),
+		DEFJMPLABEL(LABEL("proc1_return")),
+		DEFJMPLABEL(LABEL("unreachable_instruction")),
 		RETOP,
 		DEFPROCLABEL(LABEL("proc2")),
+		ALLOCOP(S8,PTR(9)),
 		GETARGOP(U64,REG(1),PORT(0)),
 		//DUMPPORTOP(U64,PORT(1)),
 		BINOPIMM(MUL,U64,REG(2),REG(1),IMMU64(10)),
@@ -232,7 +233,6 @@ Test_result test_procedure_calls() {
 		//DUMPREGOP(U64,REG(2)),
 		SETRETOP(U64,PORT(0),REG(2)),
 		RETOP,
-		HALTOP,
 	};
 
 	JIRIMAGE image;
@@ -240,21 +240,25 @@ Test_result test_procedure_calls() {
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
 	bool status = (image.port[0] == 0x2);
+	FILE *outfile = fopen("out.asm", "w");
+	JIR_translate_nasm(outfile, &image);
+	fclose(outfile);
 	JIRIMAGE_destroy(&image);
 	return TEST_RESULT(status);
 }
 
 Test_result test_heap() {
 	JIR instarr[] = {
+		DEFPROCLABEL(LABEL("main")),
 		MOVEOPIMM(U16, REG(1), IMMU64(0xc)),
-		MOVEOPIMM(PTR_HEAP, REG(2), PTR(0xfed)),
-		STOROPIND(PTR_HEAP, U16, REG(2), REG(1)),
-		LOADOPIND(U16, PTR_HEAP, REG(3), REG(2)),
+		MOVEOPIMM(PTR_HEAP, PTR(2), OFFSET(0xfed)),
+		STOROPIND(PTR_HEAP, U16, PTR(2), REG(1)),
+		LOADOPIND(U16, PTR_HEAP, REG(3), PTR(2)),
 		//DUMPREGOP(U16, REG(3)),
 		//DUMPMEMOP(PTR_HEAP, false, true, REG(2), IMMU64(0xfed+18)),
 		GROWHEAPOP(IMMU64(2)),
 		//DUMPMEMOP(PTR_HEAP, false, true, REG(2), IMMU64(0xfed+100)),
-		HALTOP,
+		RETOP,
 	};
 
 	JIRIMAGE image;
@@ -268,12 +272,15 @@ Test_result test_heap() {
 
 Test_result test_globals() {
 	JIR instarr[] = {
-		DEFGLOBAL(LABEL("test_global_var_1"), F32, IMMF32(42.1309)),
+		DEFPROCLABEL(LABEL("main")),
 		DEFGLOBAL(LABEL("test_global_var_2"), F32, IMMF32(0.0)),
-		LOADOP(F32, PTR_GLOBAL, REG(0), LABEL("test_global_var_1")),
-		BINOPIMM(FDIV, F32, REG(1), REG(0), IMMF32(2.0)),
-		STOROP(PTR_GLOBAL, F32, LABEL("test_global_var_2"), REG(1)),
-		HALTOP,
+		DEFGLOBAL(LABEL("test_global_var_1"), F32, IMMF32(42.1309)),
+		DEFGLOBAL(LABEL("biginteger"), U64, IMMU64(0x34234)),
+		MOVEOPIMM(PTR_GLOBAL, PTR(2), LABEL("test_global_var_1")),
+		LOADOPIND(F32, PTR_GLOBAL, FREG(0), PTR(2)),
+		BINOPIMM(FDIV, F32, FREG(1), FREG(0), IMMF32(2.0)),
+		STOROP(PTR_GLOBAL, F32, LABEL("test_global_var_2"), FREG(1)),
+		RETOP,
 	};
 	JIRIMAGE image;
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
@@ -281,9 +288,19 @@ Test_result test_globals() {
 		JIR_exec(&image);
 	float test_global_var_1 = 42.1309;
 	float test_global_var_2 = 42.1309 / 2.0;
-	bool status = (image.reg_f32[0] == test_global_var_1 && *(float*)(image.global+sizeof(float)) == test_global_var_2);
+	bool status = (image.reg_f32[0] == test_global_var_1 && *(float*)(image.global) == test_global_var_2);
 	JIRIMAGE_destroy(&image);
 	return TEST_RESULT(status);
+}
+
+Test_result test_register_allocation() {
+	JIR prog[] = {
+		BINOP(ADD,S64,REG(0),REG(1),REG(2)),
+		UNOP(NEG,S64,REG(3),REG(0)),
+		BINOP(ADD,S64,REG(4),REG(3),REG(5)),
+	};
+	JIR_optimize_regs(prog, STATICARRLEN(prog));
+	return TEST_RESULT(true);
 }
 
 int main(int argc, char **argv) {
@@ -296,6 +313,7 @@ int main(int argc, char **argv) {
 		test_procedure_calls,
 		test_heap,
 		test_globals,
+		test_register_allocation,
 	};
 
 	STATICARRFOR(tests)

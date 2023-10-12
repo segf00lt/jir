@@ -1,4 +1,4 @@
-CFLAGS = -g -Wall -Wpedantic -Werror -Wno-missing-braces -Wno-parentheses
+CFLAGS = -g -Wall -Wpedantic -Werror -Wno-missing-braces -Wno-parentheses -Wno-strict-prototypes
 LDFLAGS = -lm
 
 all:
