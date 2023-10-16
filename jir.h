@@ -1601,28 +1601,27 @@ int _conflict_cmp(const void *a, const void *b) {
 
 void JIR_optimize_regs(JIR *prog, u64 proglen) {
 	struct { int i; u64 c; } reg_conflictgraph[64] = {0};
-	//struct { int i; u64 c; } freg_conflictgraph[64] = {0};
+	struct { int i; u64 c; } freg_conflictgraph[64] = {0};
 	//struct { int i; u64 c; } ptr_conflictgraph[64] = {0};
 
 	// build conflict graphs
 
 	s64 reg_lifetime[64] = {0};
-	//u64 freg_deathtime[64] = {0};
-	//u64 live_fregs_mask = 0;
+	u64 freg_lifetime[64] = {0};
 
 	for(u64 i = 0; i < proglen; ++i) {
 		JIR inst = prog[i];
 		switch(inst.opcode) {
 			default:
-				UNREACHABLE;
+				break;
 			case JIROP_NOT: case JIROP_NEG:
 				reg_lifetime[inst.operand[0].r] = i;
 				reg_lifetime[inst.operand[1].r] = i;
 				break;
-			//case JIROP_FNEG:
-			//	freg_lifetime[inst.operand[0].freg] = i;
-			//	freg_lifetime[inst.operand[1].freg] = i;
-			//	break;
+			case JIROP_FNEG:
+				freg_lifetime[inst.operand[0].freg] = i;
+				freg_lifetime[inst.operand[1].freg] = i;
+				break;
 			case JIROP_AND: case JIROP_OR: case JIROP_XOR: case JIROP_LSHIFT:
 			case JIROP_RSHIFT: case JIROP_ADD: case JIROP_SUB: case JIROP_MUL:
 			case JIROP_DIV: case JIROP_MOD: case JIROP_EQ: case JIROP_NE:
@@ -1632,14 +1631,14 @@ void JIR_optimize_regs(JIR *prog, u64 proglen) {
 				if(!inst.immediate[2])
 					reg_lifetime[inst.operand[2].r] = i;
 				break;
-			//case JIROP_FADD: case JIROP_FSUB: case JIROP_FMUL: case JIROP_FDIV:
-			//case JIROP_FMOD: case JIROP_FEQ: case JIROP_FNE: case JIROP_FLE:
-			//case JIROP_FGT: case JIROP_FLT: case JIROP_FGE:
-			//	freg_lifetime[inst.operand[0].freg] = i;
-			//	freg_lifetime[inst.operand[1].freg] = i;
-			//	if(!inst.immediate[2])
-			//		freg_lifetime[inst.operand[2].freg] = i;
-			//	break;
+			case JIROP_FADD: case JIROP_FSUB: case JIROP_FMUL: case JIROP_FDIV:
+			case JIROP_FMOD: case JIROP_FEQ: case JIROP_FNE: case JIROP_FLE:
+			case JIROP_FGT: case JIROP_FLT: case JIROP_FGE:
+				freg_lifetime[inst.operand[0].freg] = i;
+				freg_lifetime[inst.operand[1].freg] = i;
+				if(!inst.immediate[2])
+					freg_lifetime[inst.operand[2].freg] = i;
+				break;
 		}
 	}
 
@@ -1650,15 +1649,19 @@ void JIR_optimize_regs(JIR *prog, u64 proglen) {
 	*/
 
 	u64 live_regs_mask = 0;
+	u64 live_fregs_mask = 0;
 
 	for(u64 i = 0; i < proglen; ++i) {
 		JIR inst = prog[i];
 		bool r0_is_alive = (reg_lifetime[inst.operand[0].r] >= 0);
 		bool r1_is_alive = (reg_lifetime[inst.operand[1].r] >= 0);
 		bool r2_is_alive = (reg_lifetime[inst.operand[2].r] >= 0);
+		bool f0_is_alive = (freg_lifetime[inst.operand[0].freg] >= 0);
+		bool f1_is_alive = (freg_lifetime[inst.operand[1].freg] >= 0);
+		bool f2_is_alive = (freg_lifetime[inst.operand[2].freg] >= 0);
 		switch(inst.opcode) {
 			default:
-				UNREACHABLE;
+				break;
 			case JIROP_NOT: case JIROP_NEG:
 				live_regs_mask |= (r0_is_alive << inst.operand[0].r) | (r1_is_alive << inst.operand[1].r);
 				reg_conflictgraph[inst.operand[0].r].i = inst.operand[0].r;
@@ -1666,6 +1669,14 @@ void JIR_optimize_regs(JIR *prog, u64 proglen) {
 				reg_conflictgraph[inst.operand[0].r].c = reg_conflictgraph[inst.operand[1].r].c = live_regs_mask;
 				reg_lifetime[inst.operand[0].r] -= r0_is_alive;
 				reg_lifetime[inst.operand[1].r] -= r1_is_alive;
+				break;
+			case JIROP_FNEG:
+				live_fregs_mask |= (f0_is_alive << inst.operand[0].freg) | (f1_is_alive << inst.operand[1].freg);
+				freg_conflictgraph[inst.operand[0].freg].i = inst.operand[0].freg;
+				freg_conflictgraph[inst.operand[1].freg].i = inst.operand[1].freg;
+				freg_conflictgraph[inst.operand[0].freg].c = reg_conflictgraph[inst.operand[1].freg].c = live_fregs_mask;
+				freg_lifetime[inst.operand[0].freg] -= f0_is_alive;
+				freg_lifetime[inst.operand[1].freg] -= f1_is_alive;
 				break;
 			case JIROP_AND: case JIROP_OR: case JIROP_XOR: case JIROP_LSHIFT:
 			case JIROP_RSHIFT: case JIROP_ADD: case JIROP_SUB: case JIROP_MUL:
@@ -1684,19 +1695,36 @@ void JIR_optimize_regs(JIR *prog, u64 proglen) {
 					reg_lifetime[inst.operand[2].r] -= r2_is_alive;
 				}
 				break;
+			case JIROP_FADD: case JIROP_FSUB: case JIROP_FMUL: case JIROP_FDIV:
+			case JIROP_FMOD: case JIROP_FEQ: case JIROP_FNE: case JIROP_FLE:
+			case JIROP_FGT: case JIROP_FLT: case JIROP_FGE:
+				live_fregs_mask |= (f0_is_alive << inst.operand[0].freg) | (f1_is_alive << inst.operand[1].freg);
+				reg_conflictgraph[inst.operand[0].freg].i = inst.operand[0].freg;
+				reg_conflictgraph[inst.operand[1].freg].i = inst.operand[1].freg;
+				reg_conflictgraph[inst.operand[0].freg].c = reg_conflictgraph[inst.operand[1].freg].c = live_fregs_mask;
+				freg_lifetime[inst.operand[0].freg] -= f0_is_alive;
+				freg_lifetime[inst.operand[1].freg] -= f1_is_alive;
+				if(!inst.immediate[2]) {
+					live_fregs_mask |= (f2_is_alive << inst.operand[2].freg);
+					freg_conflictgraph[inst.operand[2].freg].i = inst.operand[2].freg;
+					freg_conflictgraph[inst.operand[2].freg].c = live_fregs_mask;
+					freg_lifetime[inst.operand[2].freg] -= f2_is_alive;
+				}
+				break;
 		}
 	}
 
 	bool allocated[64] = {0};
-	u64 colormap[64] = {0};
+	u64 reg_colormap[64] = {0};
+	u64 freg_colormap[64] = {0};
 	u64 color = 0;
 
 	// sort integer reg conflicts
 	for(int i = 0; i < STATICARRLEN(reg_conflictgraph); ++i) reg_conflictgraph[i].i = i;
 	qsort(reg_conflictgraph, STATICARRLEN(reg_conflictgraph), sizeof(*reg_conflictgraph), _conflict_cmp);
 
-	//for(int i = 0; i < STATICARRLEN(freg_conflictgraph); ++i) freg_conflictgraph[i].i = i;
-	//qsort(freg_conflictgraph, STATICARRLEN(freg_conflictgraph), sizeof(*freg_conflictgraph), _conflict_cmp);
+	for(int i = 0; i < STATICARRLEN(freg_conflictgraph); ++i) freg_conflictgraph[i].i = i;
+	qsort(freg_conflictgraph, STATICARRLEN(freg_conflictgraph), sizeof(*freg_conflictgraph), _conflict_cmp);
 
 	/*
 	for(int i = 0; i < 30; ++i) {
@@ -1731,7 +1759,7 @@ void JIR_optimize_regs(JIR *prog, u64 proglen) {
 				u64 mask = (x & -x);
 				u64 rightmost = (u64)log2(mask + 1);
 				x ^= mask;
-				cur_color_already_adjacent = (colormap[rightmost] == c && allocated[rightmost]);
+				cur_color_already_adjacent = (reg_colormap[rightmost] == c && allocated[rightmost]);
 			}
 
 			if(cur_color_already_adjacent) {
@@ -1743,15 +1771,63 @@ void JIR_optimize_regs(JIR *prog, u64 proglen) {
 
 		if(cur_color_already_adjacent) {
 			++color;
-			colormap[reg_conflictgraph[i].i] = color;
+			reg_colormap[reg_conflictgraph[i].i] = color;
 		} else {
-			colormap[reg_conflictgraph[i].i] = c;
+			reg_colormap[reg_conflictgraph[i].i] = c;
 		}
 		allocated[reg_conflictgraph[i].i] = true;
 	}
 
+	color = 0;
+
+	for(int i = 0; i < STATICARRLEN(freg_conflictgraph); ++i) {
+		u64 x = freg_conflictgraph[i].c;
+
+		if(x == 0)
+			continue;
+
+		/*
+		 * Check the adjacency list for an adjacent node with the same color as the current color
+		 * If a conflict is found then check for adjacent nodes of the previous color
+		 * If all the previous colors have been used on an adjacent node then use a new color
+		 *
+		 * So apparently what I've written is a greedy graph coloring algorithm, which wont find the
+		 * minimum number of registers but will do okay most of the time.
+		 */
+
+		bool cur_color_already_adjacent = false;
+		u64 c = 0;
+		for(; c <= color; ++c) {
+			cur_color_already_adjacent = false;
+
+			while(!cur_color_already_adjacent && x > 0) {
+				u64 mask = (x & -x);
+				u64 rightmost = (u64)log2(mask + 1);
+				x ^= mask;
+				cur_color_already_adjacent = (freg_colormap[rightmost] == c && allocated[rightmost]);
+			}
+
+			if(cur_color_already_adjacent) {
+				x = freg_conflictgraph[i].c;
+			} else {
+				break;
+			}
+		}
+
+		if(cur_color_already_adjacent) {
+			++color;
+			freg_colormap[freg_conflictgraph[i].i] = color;
+		} else {
+			freg_colormap[freg_conflictgraph[i].i] = c;
+		}
+		allocated[freg_conflictgraph[i].i] = true;
+	}
+
 	for(int i = 0; i < 30; ++i)
-		printf("R%i -> R%lu\n", i, colormap[i]);
+		printf("R%i -> R%lu\n", i, reg_colormap[i]);
+
+	for(int i = 0; i < 30; ++i)
+		printf("F%i -> F%lu\n", i, freg_colormap[i]);
 }
 
 void JIR_translate_nasm(FILE *outfile, JIRIMAGE *image) {

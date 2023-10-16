@@ -74,7 +74,7 @@ Test_result test_binary_and_unaryops() {
 		UNOP(NOT,U16,REG(1),REG(1)),
 		MOVEOPIMM(F32,FREG(1),IMMF32(35.412)),
 		UNOP(FNEG,F32,FREG(2),FREG(1)),
-		BINOP(FSUB,F32,REG(2),REG(2),REG(1)),
+		BINOP(FSUB,F32,FREG(2),FREG(2),FREG(1)),
 		BINOPIMM(FMUL,F32,FREG(3),FREG(1),IMMF32(2.0)),
 		BINOP(FADD,F32,FREG(3),FREG(3),FREG(2)),
 		RETOP,
@@ -84,6 +84,7 @@ Test_result test_binary_and_unaryops() {
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
+	JIR_optimize_regs(instarr, STATICARRLEN(instarr));
 
 	u64 *reg = image.reg;
 	float *reg_f32 = image.reg_f32;
