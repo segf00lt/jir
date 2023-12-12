@@ -77,6 +77,11 @@ Test_result test_binary_and_unaryops() {
 		BINOP(FSUB,F32,FREG(2),FREG(2),FREG(1)),
 		BINOPIMM(FMUL,F32,FREG(3),FREG(1),IMMF32(2.0)),
 		BINOP(FADD,F32,FREG(3),FREG(3),FREG(2)),
+		SETRETOP(U64,PORT(0),REG(0)),
+		SETRETOP(U64,PORT(1),REG(1)),
+		SETRETOP(F32,PORT(2),FREG(1)),
+		SETRETOP(F32,PORT(3),FREG(2)),
+		SETRETOP(F32,PORT(4),FREG(3)),
 		RETOP,
 	};
 
@@ -84,20 +89,37 @@ Test_result test_binary_and_unaryops() {
 	JIRIMAGE_init(&image, instarr, STATICARRLEN(instarr));
 	if(JIR_preprocess(&image))
 		JIR_exec(&image);
+
+	bool status = false;
+	{
+		u64 *reg = image.reg;
+		float *reg_f32 = image.reg_f32;
+
+		bool test_neg_s8_not_u16    = (reg[1] == (~(-reg[0]&0xff)&0xffff));
+		bool test_fneg_f32_fsub_f32 = (reg_f32[2] == (-reg_f32[1] - reg_f32[1]));
+		bool test_fmul_f32_fadd_f32 = (reg_f32[3] == (reg_f32[1]*2.0 + reg_f32[2]));
+
+		status = test_fmul_f32_fadd_f32 && test_fneg_f32_fsub_f32 && test_neg_s8_not_u16;
+	}
+
 	JIR_optimize_regs(instarr, STATICARRLEN(instarr));
+	JIR_exec(&image);
 
-	u64 *reg = image.reg;
-	float *reg_f32 = image.reg_f32;
+	bool status2 = false;
+	{
+		u64 *reg = image.reg;
+		float *reg_f32 = image.reg_f32;
 
-	bool test_neg_s8_not_u16    = (reg[1] == (~(-reg[0]&0xff)&0xffff));
-	bool test_fneg_f32_fsub_f32 = (reg_f32[2] == (-reg_f32[1] - reg_f32[1]));
-	bool test_fmul_f32_fadd_f32 = (reg_f32[3] == (reg_f32[1]*2.0 + reg_f32[2]));
+		bool test_neg_s8_not_u16    = (reg[1] == (~(-reg[0]&0xff)&0xffff));
+		bool test_fneg_f32_fsub_f32 = (reg_f32[2] == (-reg_f32[1] - reg_f32[1]));
+		bool test_fmul_f32_fadd_f32 = (reg_f32[3] == (reg_f32[1]*2.0 + reg_f32[2]));
 
-	bool status = test_fmul_f32_fadd_f32 && test_fneg_f32_fsub_f32 && test_neg_s8_not_u16;
+		status2 = test_fmul_f32_fadd_f32 && test_fneg_f32_fsub_f32 && test_neg_s8_not_u16;
+	}
 
 	JIRIMAGE_destroy(&image);
 
-	return TEST_RESULT(status);
+	return TEST_RESULT(status && status2);
 }
 
 Test_result test_io() {
@@ -296,6 +318,11 @@ Test_result test_globals() {
 
 Test_result test_register_allocation() {
 	JIR prog[] = {
+		DEFPROCLABEL(LABEL("main")),
+
+		MOVEOPIMM(S64, REG(1), IMMU64(3)),
+		MOVEOPIMM(S64, REG(2), IMMU64(5)),
+		MOVEOPIMM(S64, REG(5), IMMU64(7)),
 		BINOP(ADD,S64,REG(0),REG(1),REG(2)),
 		UNOP(NEG,S64,REG(3),REG(0)),
 		BINOP(ADD,S64,REG(4),REG(3),REG(5)),
@@ -303,37 +330,81 @@ Test_result test_register_allocation() {
 		BINOP(ADD,S64,REG(1),REG(3),REG(4)),
 		BINOPIMM(SUB,S64,REG(4),REG(4),IMMU64(1)),
 		BINOP(ADD,S64,REG(1),REG(5),REG(2)),
+		SETRETOP(S64,PORT(0),REG(1)),
+
+		MOVEOPIMM(S64, REG(7), IMMU64(3)),
+		MOVEOPIMM(S64, REG(8), IMMU64(5)),
+		MOVEOPIMM(S64, REG(11), IMMU64(7)),
 		BINOP(ADD,S64,REG(6),REG(7),REG(8)),
 		UNOP(NEG,S64,REG(9),REG(6)),
 		BINOP(ADD,S64,REG(10),REG(9),REG(11)),
-		BINOPIMM(MUL,S64,REG(11),REG(10),IMMU64(8)),
+		BINOPIMM(MUL,S64,REG(11),REG(10),IMMU64(2)),
 		BINOP(ADD,S64,REG(7),REG(9),REG(10)),
-		BINOPIMM(SUB,S64,REG(10),REG(10),IMMU64(7)),
+		BINOPIMM(SUB,S64,REG(10),REG(10),IMMU64(1)),
 		BINOP(ADD,S64,REG(7),REG(11),REG(8)),
+		SETRETOP(S64,PORT(1),REG(7)),
+
+		MOVEOPIMM(S64, REG(13), IMMU64(3)),
+		MOVEOPIMM(S64, REG(14), IMMU64(5)),
+		MOVEOPIMM(S64, REG(17), IMMU64(7)),
 		BINOP(ADD,S64,REG(12),REG(13),REG(14)),
 		UNOP(NEG,S64,REG(15),REG(12)),
 		BINOP(ADD,S64,REG(16),REG(15),REG(17)),
-		BINOPIMM(MUL,S64,REG(17),REG(16),IMMU64(14)),
+		BINOPIMM(MUL,S64,REG(17),REG(16),IMMU64(2)),
 		BINOP(ADD,S64,REG(13),REG(15),REG(16)),
-		BINOPIMM(SUB,S64,REG(16),REG(16),IMMU64(13)),
+		BINOPIMM(SUB,S64,REG(16),REG(16),IMMU64(1)),
 		BINOP(ADD,S64,REG(13),REG(17),REG(14)),
+		SETRETOP(S64,PORT(2),REG(13)),
+
+		MOVEOPIMM(S64, REG(19), IMMU64(3)),
+		MOVEOPIMM(S64, REG(20), IMMU64(5)),
+		MOVEOPIMM(S64, REG(23), IMMU64(7)),
 		BINOP(ADD,S64,REG(18),REG(19),REG(20)),
 		UNOP(NEG,S64,REG(21),REG(18)),
 		BINOP(ADD,S64,REG(22),REG(21),REG(23)),
-		BINOPIMM(MUL,S64,REG(23),REG(22),IMMU64(20)),
+		BINOPIMM(MUL,S64,REG(23),REG(22),IMMU64(2)),
 		BINOP(ADD,S64,REG(19),REG(21),REG(22)),
-		BINOPIMM(SUB,S64,REG(22),REG(22),IMMU64(19)),
+		BINOPIMM(SUB,S64,REG(22),REG(22),IMMU64(1)),
 		BINOP(ADD,S64,REG(19),REG(23),REG(20)),
+		SETRETOP(S64,PORT(3),REG(19)),
+
+		MOVEOPIMM(S64, REG(25), IMMU64(3)),
+		MOVEOPIMM(S64, REG(26), IMMU64(5)),
+		MOVEOPIMM(S64, REG(29), IMMU64(7)),
 		BINOP(ADD,S64,REG(24),REG(25),REG(26)),
 		UNOP(NEG,S64,REG(27),REG(24)),
 		BINOP(ADD,S64,REG(28),REG(27),REG(29)),
-		BINOPIMM(MUL,S64,REG(29),REG(28),IMMU64(26)),
+		BINOPIMM(MUL,S64,REG(29),REG(28),IMMU64(2)),
 		BINOP(ADD,S64,REG(25),REG(27),REG(28)),
-		BINOPIMM(SUB,S64,REG(28),REG(28),IMMU64(25)),
+		BINOPIMM(SUB,S64,REG(28),REG(28),IMMU64(1)),
 		BINOP(ADD,S64,REG(25),REG(29),REG(26)),
+		SETRETOP(S64,PORT(4),REG(25)),
+
+		RETOP,
+		HALTOP,
 	};
+
+	JIRIMAGE image;
+	JIRIMAGE_init(&image, prog, STATICARRLEN(prog));
+	if(JIR_preprocess(&image))
+		JIR_exec(&image);
+
+	u64 *ports = image.port;
+	bool status = (ports[0] == ports[1] && ports[1] == ports[2] && ports[2] == ports[3] && ports[3] == ports[4]);
+
+	JIRIMAGE_destroy(&image);
+
+	JIRIMAGE_init(&image, prog, STATICARRLEN(prog));
 	JIR_optimize_regs(prog, STATICARRLEN(prog));
-	return TEST_RESULT(true);
+	if(JIR_preprocess(&image))
+		JIR_exec(&image);
+
+	ports = image.port;
+	bool status2 = (ports[0] == ports[1] && ports[1] == ports[2] && ports[2] == ports[3] && ports[3] == ports[4]);
+
+	JIRIMAGE_destroy(&image);
+
+	return TEST_RESULT(status && status2);
 }
 
 int main(int argc, char **argv) {
