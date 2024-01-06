@@ -19,8 +19,6 @@
 #include "basic.h"
 #define JLIB_ARENA_IMPL
 #include "arena.h"
-#define STB_SPRINTF_IMPLEMENTATION
-#include "stb_sprintf.h"
 #define STB_DS_IMPLEMENTATION
 #include "stb_ds.h"
 

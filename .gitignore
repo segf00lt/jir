@@ -5,8 +5,6 @@ jir
 test_llvm.c
 test_llvm.ll
 test_llvm.s
-stb_ds.h
-stb_sprintf.h
 a.out
 lex.c
 names.txt
