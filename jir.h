@@ -518,6 +518,14 @@ void JIR_translate_nasm(FILE *outfile, JIRIMAGE *image);
 	X(DEBUGMSG)   \
 	X(NOOP)
 
+// TODO
+// Need abstractions for local and global pointers. No more pointer
+// registers for indirect load and stor. Should be able to directly refer to
+// global and local variables at a higher level than giving the address, use
+// indirection to keep a table of pointers to variables (also store their sizes
+// in bytes, and probably the symbol name for debug purposes) so we can
+// reference them by an id, simple.
+
 #define TYPES    \
 	X(S64)       \
 	X(S32)       \
@@ -1724,12 +1732,14 @@ void JIR_optimize_regs(JIR *prog, u64 proglen) {
 			default:
 				break;
 			case JIROP_NOT: case JIROP_NEG:
+				live_regs_mask &= ~((1 << inst.operand[0].r) | (1 << inst.operand[1].r));
 				live_regs_mask |= (r0_is_alive << inst.operand[0].r) | (r1_is_alive << inst.operand[1].r);
 				reg_conflictgraph[inst.operand[0].r] = reg_conflictgraph[inst.operand[1].r] = live_regs_mask;
 				reg_lifetime[inst.operand[0].r] -= r0_is_alive;
 				reg_lifetime[inst.operand[1].r] -= r1_is_alive;
 				break;
 			case JIROP_FNEG:
+				live_fregs_mask &= ~((1 << inst.operand[0].freg) | (1 << inst.operand[1].freg));
 				live_fregs_mask |= (f0_is_alive << inst.operand[0].freg) | (f1_is_alive << inst.operand[1].freg);
 				freg_conflictgraph[inst.operand[0].freg] = freg_conflictgraph[inst.operand[1].freg] = live_fregs_mask;
 				freg_lifetime[inst.operand[0].freg] -= f0_is_alive;
@@ -1739,11 +1749,13 @@ void JIR_optimize_regs(JIR *prog, u64 proglen) {
 			case JIROP_RSHIFT: case JIROP_ADD: case JIROP_SUB: case JIROP_MUL:
 			case JIROP_DIV: case JIROP_MOD: case JIROP_EQ: case JIROP_NE:
 			case JIROP_LE: case JIROP_GT: case JIROP_LT: case JIROP_GE:
+				live_regs_mask &= ~((1 << inst.operand[0].r) | (1 << inst.operand[1].r));
 				live_regs_mask |= (r0_is_alive << inst.operand[0].r) | (r1_is_alive << inst.operand[1].r);
 				reg_conflictgraph[inst.operand[0].r] = reg_conflictgraph[inst.operand[1].r] = live_regs_mask;
 				reg_lifetime[inst.operand[0].r] -= r0_is_alive;
 				reg_lifetime[inst.operand[1].r] -= r1_is_alive;
 				if(!inst.immediate[2]) {
+					live_regs_mask &= ~(1 << inst.operand[2].r);
 					live_regs_mask |= (r2_is_alive << inst.operand[2].r);
 					reg_conflictgraph[inst.operand[2].r] = live_regs_mask;
 					reg_lifetime[inst.operand[2].r] -= r2_is_alive;
@@ -1752,11 +1764,13 @@ void JIR_optimize_regs(JIR *prog, u64 proglen) {
 			case JIROP_FADD: case JIROP_FSUB: case JIROP_FMUL: case JIROP_FDIV:
 			case JIROP_FMOD: case JIROP_FEQ: case JIROP_FNE: case JIROP_FLE:
 			case JIROP_FGT: case JIROP_FLT: case JIROP_FGE:
+				live_fregs_mask &= ~((1 << inst.operand[0].freg) | (1 << inst.operand[1].freg));
 				live_fregs_mask |= (f0_is_alive << inst.operand[0].freg) | (f1_is_alive << inst.operand[1].freg);
 				freg_conflictgraph[inst.operand[0].freg] = freg_conflictgraph[inst.operand[1].freg] = live_fregs_mask;
 				freg_lifetime[inst.operand[0].freg] -= f0_is_alive;
 				freg_lifetime[inst.operand[1].freg] -= f1_is_alive;
 				if(!inst.immediate[2]) {
+					live_fregs_mask &= ~(1 << inst.operand[2].freg);
 					live_fregs_mask |= (f2_is_alive << inst.operand[2].freg);
 					freg_conflictgraph[inst.operand[2].freg] = live_fregs_mask;
 					freg_lifetime[inst.operand[2].freg] -= f2_is_alive;
