@@ -420,8 +420,8 @@ int main(int argc, char **argv) {
 		test_register_allocation,
 	};
 
-	STATICARRFOR(tests)
-		test_run(tests[tests_index]);
+	for(int i = 0; i < STATICARRLEN(tests); ++i)
+		test_run(tests[i]);
 
 	return 0;
 }
